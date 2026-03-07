@@ -53,6 +53,9 @@ WARNING_LEVELS = [
 # Minimum interval between polls (seconds) to avoid hammering the API
 MIN_POLL_INTERVAL = 60
 
+# How often to log local counter accounts (every N requests)
+LOCAL_COUNTER_LOG_INTERVAL = 100
+
 # Default path for persistent request counters
 DEFAULT_COUNTERS_FILE = Path(__file__).parent.parent / "usage_counters.json"
 
@@ -423,27 +426,25 @@ async def _monitor_loop(accounts: list[AccountMonitor], stop_event: asyncio.Even
         except asyncio.TimeoutError:
             pass  # normal wake-up
 
-        any_logged = False
         for acct in accounts:
             if acct.disabled and acct.local_limit == 0:
                 continue
-            if acct.disabled and acct.local_limit > 0:
-                # Local counter accounts: log alongside API accounts when any API account logs
-                continue  # will be logged below if any_logged
+
             requests_since = acct.request_count - acct.request_count_at_last_check
+
+            if acct.disabled and acct.local_limit > 0:
+                # Local counter accounts: log every LOCAL_COUNTER_LOG_INTERVAL requests
+                if requests_since >= LOCAL_COUNTER_LOG_INTERVAL:
+                    acct.request_count_at_last_check = acct.request_count
+                    log_usage(acct, local_counter)
+                continue
+
             poll_interval = _get_poll_interval(acct.usage.usage_pct)
 
             if requests_since >= poll_interval:
                 acct.usage = await fetch_usage_limits(acct.auth_manager)
                 acct.request_count_at_last_check = acct.request_count
                 log_usage(acct, local_counter)
-                any_logged = True
-
-        # Log local-counter accounts whenever an API account was logged
-        if any_logged:
-            for acct in accounts:
-                if acct.disabled and acct.local_limit > 0:
-                    log_usage(acct, local_counter)
 
 
 class UsageMonitor:
