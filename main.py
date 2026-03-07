@@ -378,7 +378,7 @@ async def lifespan(app: FastAPI):
     # Create usage monitor
     app.state.usage_monitor = UsageMonitor()
     if MULTI_ACCOUNT_ROUTING and hasattr(app.state, 'auth_manager_primary'):
-        app.state.usage_monitor.add_account("primary", app.state.auth_manager_primary)
+        app.state.usage_monitor.add_account("primary", app.state.auth_manager_primary, local_limit=10000)
         app.state.usage_monitor.add_account("haiku", app.state.auth_manager_haiku)
     else:
         app.state.usage_monitor.add_account("default", app.state.auth_manager)

@@ -9,8 +9,10 @@ Uses adaptive polling: checks more frequently as usage climbs.
 """
 
 import asyncio
+import json
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Optional
 
 import httpx
@@ -51,6 +53,75 @@ WARNING_LEVELS = [
 # Minimum interval between polls (seconds) to avoid hammering the API
 MIN_POLL_INTERVAL = 60
 
+# Default path for persistent request counters
+DEFAULT_COUNTERS_FILE = Path(__file__).parent.parent / "usage_counters.json"
+
+
+# ==================================================================================================
+# Persistent Request Counter (for accounts without GetUsageLimits support)
+# ==================================================================================================
+
+class LocalUsageCounter:
+    """
+    Persists per-account request counts to a JSON file.
+    Auto-resets on the 1st of each billing cycle (monthly).
+
+    File format:
+        {
+            "primary": {"count": 42, "billing_cycle": "2026-03"},
+            ...
+        }
+    """
+
+    def __init__(self, path: Path = DEFAULT_COUNTERS_FILE):
+        self._path = path
+        self._data: dict[str, dict] = {}
+        self._load()
+
+    def _current_cycle(self) -> str:
+        """Return current billing cycle as YYYY-MM."""
+        return datetime.now(timezone.utc).strftime("%Y-%m")
+
+    def _load(self) -> None:
+        """Load counters from disk."""
+        try:
+            if self._path.exists():
+                self._data = json.loads(self._path.read_text(encoding="utf-8"))
+        except Exception as e:
+            logger.warning(f"Failed to load usage counters from {self._path}: {e}")
+            self._data = {}
+
+    def _save(self) -> None:
+        """Persist counters to disk."""
+        try:
+            self._path.write_text(
+                json.dumps(self._data, indent=2),
+                encoding="utf-8",
+            )
+        except Exception as e:
+            logger.warning(f"Failed to save usage counters to {self._path}: {e}")
+
+    def get(self, account: str) -> int:
+        """Get current request count for an account, resetting if cycle changed."""
+        entry = self._data.get(account, {})
+        if entry.get("billing_cycle") != self._current_cycle():
+            # New billing cycle — reset
+            self._data[account] = {"count": 0, "billing_cycle": self._current_cycle()}
+            self._save()
+            return 0
+        return entry.get("count", 0)
+
+    def increment(self, account: str) -> int:
+        """Increment and persist. Returns new count."""
+        cycle = self._current_cycle()
+        entry = self._data.get(account, {})
+        if entry.get("billing_cycle") != cycle:
+            entry = {"count": 0, "billing_cycle": cycle}
+        entry["count"] = entry.get("count", 0) + 1
+        self._data[account] = entry
+        self._save()
+        return entry["count"]
+
 
 @dataclass
 class UsageInfo:
@@ -76,6 +147,7 @@ class AccountMonitor:
     request_count_at_last_check: int = 0
     last_warned_level: float = 0.0  # highest pct level we've warned about
     disabled: bool = False  # stop polling after permanent errors (e.g., no subscription)
+    local_limit: int = 0  # if >0, use local counter instead of API (e.g., 10000 calls/month)
 
 
 async def fetch_usage_limits(auth_manager: KiroAuthManager) -> UsageInfo:
@@ -213,9 +285,40 @@ def _get_poll_interval(usage_pct: float) -> int:
     return ADAPTIVE_THRESHOLDS[-1][1]
 
 
-def _format_usage_log(account: AccountMonitor) -> str:
+def _format_usage_log(account: AccountMonitor, local_counter: Optional[LocalUsageCounter] = None) -> str:
     """Format a colored usage log line for stderr."""
     u = account.usage
+
+    # Local counter mode for accounts without API usage tracking
+    if account.disabled and account.local_limit > 0 and local_counter:
+        count = local_counter.get(account.name)
+        limit = account.local_limit
+        pct = (count / limit * 100) if limit > 0 else 0
+        usage_ratio = count / limit if limit > 0 else 0
+
+        bar_width = 30
+        filled = int(bar_width * usage_ratio)
+        empty = bar_width - filled
+
+        if pct >= 90:
+            bar_color = RED
+        elif pct >= 80:
+            bar_color = YELLOW
+        elif pct >= 50:
+            bar_color = CYAN
+        else:
+            bar_color = GREEN
+
+        bar = f"{bar_color}{'█' * filled}{DIM}{'░' * empty}{RESET}"
+        cycle = local_counter._current_cycle()
+
+        return (
+            f"{MAGENTA}{BOLD}📊 Usage [{account.name}]{RESET} "
+            f"{bar} "
+            f"{bar_color}{BOLD}{pct:.1f}%{RESET} "
+            f"({count}/{limit} requests)"
+            f"{DIM} | local counter | cycle {cycle}{RESET}"
+        )
 
     if u.error:
         return f"{DIM}📊 Usage [{account.name}]: ⚠ check failed — {u.error}{RESET}"
@@ -270,15 +373,32 @@ def _format_warning(account: AccountMonitor, level_label: str, color: str) -> st
     )
 
 
-def log_usage(account: AccountMonitor) -> None:
+def log_usage(account: AccountMonitor, local_counter: Optional[LocalUsageCounter] = None) -> None:
     """Log usage status and any warnings to stderr via loguru."""
     import sys
 
     # Always print the status bar
-    print(_format_usage_log(account), file=sys.stderr)
+    print(_format_usage_log(account, local_counter), file=sys.stderr)
 
     # Check if we need to warn at a new level
     u = account.usage
+
+    # For local counter accounts, synthesize usage_pct for warnings
+    if account.disabled and account.local_limit > 0 and local_counter:
+        count = local_counter.get(account.name)
+        pct_ratio = count / account.local_limit if account.local_limit > 0 else 0
+        for threshold, label, color in WARNING_LEVELS:
+            if pct_ratio >= threshold and threshold > account.last_warned_level:
+                remaining = account.local_limit - count
+                print(
+                    f"{color}{BOLD}⚠️  USAGE {label} [{account.name}]: "
+                    f"{pct_ratio*100:.1f}% used — {remaining} requests remaining{RESET}",
+                    file=sys.stderr,
+                )
+                account.last_warned_level = threshold
+                break
+        return
+
     if u.error:
         return
 
@@ -289,7 +409,7 @@ def log_usage(account: AccountMonitor) -> None:
             break
 
 
-async def _monitor_loop(accounts: list[AccountMonitor], stop_event: asyncio.Event) -> None:
+async def _monitor_loop(accounts: list[AccountMonitor], stop_event: asyncio.Event, local_counter: LocalUsageCounter) -> None:
     """
     Background loop that checks usage based on request count changes.
 
@@ -303,16 +423,27 @@ async def _monitor_loop(accounts: list[AccountMonitor], stop_event: asyncio.Even
         except asyncio.TimeoutError:
             pass  # normal wake-up
 
+        any_logged = False
         for acct in accounts:
-            if acct.disabled:
+            if acct.disabled and acct.local_limit == 0:
                 continue
+            if acct.disabled and acct.local_limit > 0:
+                # Local counter accounts: log alongside API accounts when any API account logs
+                continue  # will be logged below if any_logged
             requests_since = acct.request_count - acct.request_count_at_last_check
             poll_interval = _get_poll_interval(acct.usage.usage_pct)
 
             if requests_since >= poll_interval:
                 acct.usage = await fetch_usage_limits(acct.auth_manager)
                 acct.request_count_at_last_check = acct.request_count
-                log_usage(acct)
+                log_usage(acct, local_counter)
+                any_logged = True
+
+        # Log local-counter accounts whenever an API account was logged
+        if any_logged:
+            for acct in accounts:
+                if acct.disabled and acct.local_limit > 0:
+                    log_usage(acct, local_counter)
 
 
 class UsageMonitor:
@@ -334,16 +465,20 @@ class UsageMonitor:
         self._accounts: dict[str, AccountMonitor] = {}
         self._stop_event = asyncio.Event()
         self._task: Optional[asyncio.Task] = None
+        self._local_counter = LocalUsageCounter()
 
-    def add_account(self, name: str, auth_manager: KiroAuthManager) -> None:
-        """Register an account to monitor."""
-        self._accounts[name] = AccountMonitor(name=name, auth_manager=auth_manager)
+    def add_account(self, name: str, auth_manager: KiroAuthManager, local_limit: int = 0) -> None:
+        """Register an account to monitor. Set local_limit for accounts without API usage tracking."""
+        self._accounts[name] = AccountMonitor(name=name, auth_manager=auth_manager, local_limit=local_limit)
 
     def increment(self, account_name: str) -> None:
         """Increment request counter for an account. Call from route handlers."""
         acct = self._accounts.get(account_name)
         if acct:
             acct.request_count += 1
+            # Also increment persistent local counter for accounts that use it
+            if acct.local_limit > 0 or acct.disabled:
+                self._local_counter.increment(account_name)
 
     def get_usage(self, account_name: str) -> Optional[UsageInfo]:
         """Get cached usage info for an account."""
@@ -361,14 +496,14 @@ class UsageMonitor:
             # Disable polling for accounts with permanent errors (no subscription)
             if acct.usage.error and "no usage tracking" in (acct.usage.error or ""):
                 acct.disabled = True
-            log_usage(acct)
+            log_usage(acct, self._local_counter)
 
         print(file=sys.stderr)
 
         # Start background monitor
         account_list = list(self._accounts.values())
         self._task = asyncio.create_task(
-            _monitor_loop(account_list, self._stop_event)
+            _monitor_loop(account_list, self._stop_event, self._local_counter)
         )
 
     async def stop(self) -> None:

@@ -29,3 +29,4 @@ requests/
 .pytest_cache/
 .coverage
 htmlcov/
+usage_counters.json
