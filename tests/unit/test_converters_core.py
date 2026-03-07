@@ -4250,11 +4250,9 @@ class TestBuildKiroHistory:
 
     def test_builds_user_message_with_images(self):
         """
-        What it does: Verifies building of user message with images.
-        Purpose: Ensure images are included directly in userInputMessage.images (Issue #32 fix).
-
-        This is a critical test for Issue #30/#32 fix - images should be in Kiro format
-        and placed directly in userInputMessage, NOT in userInputMessageContext.
+        What it does: Verifies that images are stripped from history messages.
+        Purpose: Images in history bloat the payload massively (base64). The model
+        already saw and responded to them, so they're omitted from history.
         """
         print("Setup: User message with images...")
         messages = [
@@ -4275,21 +4273,13 @@ class TestBuildKiroHistory:
         user_msg = result[0]["userInputMessage"]
         print(f"User message: {user_msg}")
 
-        print(
-            "Checking that images are directly in userInputMessage (Issue #32 fix)..."
-        )
-        assert "images" in user_msg
-
-        print("Checking image format (Kiro format)...")
-        images = user_msg["images"]
-        assert len(images) == 1
-        assert images[0]["format"] == "jpeg"
-        assert images[0]["source"]["bytes"] == TEST_IMAGE_BASE64
+        print("Checking that images are NOT in history (stripped to reduce payload)...")
+        assert "images" not in user_msg
 
     def test_builds_user_message_with_multiple_images(self):
         """
-        What it does: Verifies building of user message with multiple images.
-        Purpose: Ensure all images are included directly in userInputMessage (Issue #32 fix).
+        What it does: Verifies that multiple images are stripped from history.
+        Purpose: Images in history are omitted to prevent payload bloat.
         """
         print("Setup: User message with multiple images...")
         messages = [
@@ -4308,23 +4298,14 @@ class TestBuildKiroHistory:
 
         print(f"Result: {result}")
         user_msg = result[0]["userInputMessage"]
-        images = user_msg["images"]
 
-        print(f"Comparing image count: Expected 2, Got {len(images)}")
-        assert len(images) == 2
-
-        print("Checking first image...")
-        assert images[0]["format"] == "jpeg"
-        assert images[0]["source"]["bytes"] == "image1_data"
-
-        print("Checking second image...")
-        assert images[1]["format"] == "png"
-        assert images[1]["source"]["bytes"] == "image2_data"
+        print("Checking that images are NOT in history (stripped to reduce payload)...")
+        assert "images" not in user_msg
 
     def test_builds_user_message_with_images_and_tool_results(self):
         """
-        What it does: Verifies building of user message with both images and tool_results.
-        Purpose: Ensure images are in userInputMessage and toolResults are in userInputMessageContext (Issue #32 fix).
+        What it does: Verifies building of user message with both images and tool_results in history.
+        Purpose: Images are stripped from history but toolResults are preserved.
         """
         print("Setup: User message with images and tool_results...")
         messages = [
@@ -4349,17 +4330,11 @@ class TestBuildKiroHistory:
         user_msg = result[0]["userInputMessage"]
         context = user_msg.get("userInputMessageContext", {})
 
-        print(
-            "Checking that images are directly in userInputMessage (Issue #32 fix)..."
-        )
-        assert "images" in user_msg
+        print("Checking that images are NOT in history (stripped to reduce payload)...")
+        assert "images" not in user_msg
 
         print("Checking that toolResults are in userInputMessageContext...")
         assert "toolResults" in context
-
-        print("Checking images...")
-        assert len(user_msg["images"]) == 1
-        assert user_msg["images"][0]["format"] == "png"
 
         print("Checking toolResults...")
         assert len(context["toolResults"]) == 1
@@ -4389,8 +4364,8 @@ class TestBuildKiroHistory:
 
     def test_builds_user_message_with_webp_image(self):
         """
-        What it does: Verifies building of user message with WebP image.
-        Purpose: Ensure WebP format is correctly converted to Kiro format in userInputMessage (Issue #32 fix).
+        What it does: Verifies that WebP images are stripped from history.
+        Purpose: Images in history are omitted to prevent payload bloat.
         """
         print("Setup: User message with WebP image...")
         messages = [
@@ -4406,17 +4381,14 @@ class TestBuildKiroHistory:
 
         print(f"Result: {result}")
         user_msg = result[0]["userInputMessage"]
-        images = user_msg["images"]
 
-        print("Checking WebP format...")
-        assert len(images) == 1
-        assert images[0]["format"] == "webp"
-        assert images[0]["source"]["bytes"] == "webp_image_data"
+        print("Checking that images are NOT in history (stripped to reduce payload)...")
+        assert "images" not in user_msg
 
     def test_builds_user_message_with_gif_image(self):
         """
-        What it does: Verifies building of user message with GIF image.
-        Purpose: Ensure GIF format is correctly converted to Kiro format in userInputMessage (Issue #32 fix).
+        What it does: Verifies that GIF images are stripped from history.
+        Purpose: Images in history are omitted to prevent payload bloat.
         """
         print("Setup: User message with GIF image...")
         messages = [
@@ -4432,12 +4404,9 @@ class TestBuildKiroHistory:
 
         print(f"Result: {result}")
         user_msg = result[0]["userInputMessage"]
-        images = user_msg["images"]
 
-        print("Checking GIF format...")
-        assert len(images) == 1
-        assert images[0]["format"] == "gif"
-        assert images[0]["source"]["bytes"] == "gif_image_data"
+        print("Checking that images are NOT in history (stripped to reduce payload)...")
+        assert "images" not in user_msg
 
 
 # ==================================================================================================
@@ -6101,8 +6070,9 @@ class TestBuildKiroPayloadImages:
 
     def test_includes_multiple_images_in_current_message(self):
         """
-        What it does: Verifies that multiple images are included in the current message.
-        Purpose: Ensure all images from the last user message are directly in userInputMessage (Issue #32 fix).
+        What it does: Verifies that images in current message are capped at MAX_IMAGES_PER_REQUEST.
+        Purpose: Prevent payload size limit errors when many images are sent at once.
+        Only the last N images are kept.
         """
         print("Setup: User message with multiple images...")
         messages = [
@@ -6133,7 +6103,7 @@ class TestBuildKiroPayloadImages:
         ]
         images = current_msg["images"]
 
-        print(f"Comparing image count: Expected 3, Got {len(images)}")
+        print(f"Comparing image count: Expected 3 (under cap of 4), Got {len(images)}")
         assert len(images) == 3
 
         print("Checking image formats...")
@@ -6143,8 +6113,9 @@ class TestBuildKiroPayloadImages:
 
     def test_includes_images_in_history(self):
         """
-        What it does: Verifies that images are included in history messages.
-        Purpose: Ensure images from previous user messages are directly in userInputMessage (Issue #32 fix).
+        What it does: Verifies that images are stripped from history messages.
+        Purpose: Images in history bloat the payload massively. The model already
+        saw and responded to them, so they're omitted.
         """
         print("Setup: Conversation with images in history...")
         messages = [
@@ -6173,17 +6144,9 @@ class TestBuildKiroPayloadImages:
         print(f"History length: {len(history)}")
         assert len(history) >= 1
 
-        print(
-            "Checking that first history message has images directly in userInputMessage (Issue #32 fix)..."
-        )
+        print("Checking that first history message does NOT have images (stripped)...")
         first_msg = history[0]["userInputMessage"]
-        assert "images" in first_msg
-
-        images = first_msg["images"]
-        print(f"History images: {images}")
-        assert len(images) == 1
-        assert images[0]["format"] == "jpeg"
-        assert images[0]["source"]["bytes"] == "history_image_data"
+        assert "images" not in first_msg
 
     def test_images_with_tools(self):
         """
