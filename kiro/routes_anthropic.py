@@ -149,13 +149,20 @@ async def messages(
     model_cache: ModelInfoCache = request.app.state.model_cache
 
     # Multi-account routing: pick auth manager based on model
+    usage_account = "default"
     if getattr(request.app.state, "multi_account_routing", False):
-        from kiro.auth_router import resolve_auth_manager
+        from kiro.auth_router import resolve_auth_manager, is_haiku_model
         auth_manager = resolve_auth_manager(
             request_data.model,
             request.app.state.auth_manager_primary,
             request.app.state.auth_manager_haiku,
         )
+        usage_account = "haiku" if is_haiku_model(request_data.model) else "primary"
+
+    # Track request for usage monitoring
+    usage_monitor = getattr(request.app.state, "usage_monitor", None)
+    if usage_monitor:
+        usage_monitor.increment(usage_account)
 
     # Note: prepare_new_request() and log_request_body() are now called by DebugLoggerMiddleware
     # This ensures debug logging works even for requests that fail Pydantic validation (422 errors)

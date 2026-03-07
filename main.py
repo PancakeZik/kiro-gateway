@@ -80,6 +80,7 @@ from kiro.config import (
 )
 from kiro.auth import KiroAuthManager
 from kiro.auth_router import resolve_auth_manager
+from kiro.usage_monitor import UsageMonitor
 from kiro.cache import ModelInfoCache
 from kiro.model_resolver import ModelResolver
 from kiro.routes_openai import router as openai_router
@@ -374,6 +375,14 @@ async def lifespan(app: FastAPI):
             sqlite_db=KIRO_CLI_DB_FILE if KIRO_CLI_DB_FILE else None,
         )
     
+    # Create usage monitor
+    app.state.usage_monitor = UsageMonitor()
+    if MULTI_ACCOUNT_ROUTING and hasattr(app.state, 'auth_manager_primary'):
+        app.state.usage_monitor.add_account("primary", app.state.auth_manager_primary)
+        app.state.usage_monitor.add_account("haiku", app.state.auth_manager_haiku)
+    else:
+        app.state.usage_monitor.add_account("default", app.state.auth_manager)
+
     # Create model cache
     app.state.model_cache = ModelInfoCache()
     
@@ -444,11 +453,18 @@ async def lifespan(app: FastAPI):
         logger.debug(f"Model aliases configured: {list(MODEL_ALIASES.keys())}")
     if HIDDEN_FROM_LIST:
         logger.debug(f"Models hidden from list: {HIDDEN_FROM_LIST}")
-    
+
+    # Start usage monitor (initial check + background polling)
+    await app.state.usage_monitor.start()
+
     yield
     
     # Graceful shutdown
     logger.info("Shutting down application...")
+    try:
+        await app.state.usage_monitor.stop()
+    except Exception as e:
+        logger.warning(f"Error stopping usage monitor: {e}")
     try:
         await app.state.http_client.aclose()
         logger.info("Shared HTTP client closed")
