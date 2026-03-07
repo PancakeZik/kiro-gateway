@@ -73,9 +73,13 @@ from kiro.config import (
     HIDDEN_FROM_LIST,
     FALLBACK_MODELS,
     VPN_PROXY_URL,
+    MULTI_ACCOUNT_ROUTING,
+    KIRO_CLI_DB_FILE_PRIMARY,
+    KIRO_CLI_DB_FILE_HAIKU,
     _warn_timeout_configuration,
 )
 from kiro.auth import KiroAuthManager
+from kiro.auth_router import resolve_auth_manager
 from kiro.cache import ModelInfoCache
 from kiro.model_resolver import ModelResolver
 from kiro.routes_openai import router as openai_router
@@ -335,15 +339,40 @@ async def lifespan(app: FastAPI):
     )
     logger.info("Shared HTTP client created with connection pooling")
     
-    # Create AuthManager
+    # Create AuthManager(s)
     # Priority: SQLite DB > JSON file > environment variables
-    app.state.auth_manager = KiroAuthManager(
-        refresh_token=REFRESH_TOKEN,
-        profile_arn=PROFILE_ARN,
-        region=REGION,
-        creds_file=KIRO_CREDS_FILE if KIRO_CREDS_FILE else None,
-        sqlite_db=KIRO_CLI_DB_FILE if KIRO_CLI_DB_FILE else None,
-    )
+    app.state.multi_account_routing = MULTI_ACCOUNT_ROUTING
+
+    if MULTI_ACCOUNT_ROUTING and KIRO_CLI_DB_FILE_PRIMARY and KIRO_CLI_DB_FILE_HAIKU:
+        logger.info("Multi-account routing ENABLED: primary + haiku accounts")
+        app.state.auth_manager_primary = KiroAuthManager(
+            refresh_token=REFRESH_TOKEN,
+            profile_arn=PROFILE_ARN,
+            region=REGION,
+            sqlite_db=KIRO_CLI_DB_FILE_PRIMARY,
+        )
+        app.state.auth_manager_haiku = KiroAuthManager(
+            refresh_token=REFRESH_TOKEN,
+            profile_arn=PROFILE_ARN,
+            region=REGION,
+            sqlite_db=KIRO_CLI_DB_FILE_HAIKU,
+        )
+        # Default auth_manager points to primary (used for startup model loading, etc.)
+        app.state.auth_manager = app.state.auth_manager_primary
+    else:
+        if MULTI_ACCOUNT_ROUTING:
+            logger.warning(
+                "MULTI_ACCOUNT_ROUTING is enabled but KIRO_CLI_DB_FILE_PRIMARY and/or "
+                "KIRO_CLI_DB_FILE_HAIKU are not set. Falling back to single account."
+            )
+            app.state.multi_account_routing = False
+        app.state.auth_manager = KiroAuthManager(
+            refresh_token=REFRESH_TOKEN,
+            profile_arn=PROFILE_ARN,
+            region=REGION,
+            creds_file=KIRO_CREDS_FILE if KIRO_CREDS_FILE else None,
+            sqlite_db=KIRO_CLI_DB_FILE if KIRO_CLI_DB_FILE else None,
+        )
     
     # Create model cache
     app.state.model_cache = ModelInfoCache()

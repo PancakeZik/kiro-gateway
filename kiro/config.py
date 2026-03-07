@@ -147,6 +147,29 @@ _raw_cli_db_file = _get_raw_env_value("KIRO_CLI_DB_FILE") or os.getenv("KIRO_CLI
 KIRO_CLI_DB_FILE: str = str(Path(_raw_cli_db_file)) if _raw_cli_db_file else ""
 
 # ==================================================================================================
+# Multi-Account Routing
+# ==================================================================================================
+
+# Enable model-based account routing.
+# When enabled, requests are routed to different Kiro accounts based on the requested model.
+# Haiku requests go to the haiku account; everything else goes to the primary account.
+# When disabled (default), the single KIRO_CLI_DB_FILE is used for all requests.
+_MULTI_ACCOUNT_RAW: str = os.getenv("MULTI_ACCOUNT_ROUTING", "").lower()
+MULTI_ACCOUNT_ROUTING: bool = _MULTI_ACCOUNT_RAW in ("true", "1", "yes")
+
+# SQLite DB for the primary account (opus, sonnet, auto — everything except haiku)
+_raw_cli_db_primary = _get_raw_env_value("KIRO_CLI_DB_FILE_PRIMARY") or os.getenv("KIRO_CLI_DB_FILE_PRIMARY", "")
+KIRO_CLI_DB_FILE_PRIMARY: str = str(Path(_raw_cli_db_primary)) if _raw_cli_db_primary else ""
+
+# SQLite DB for the haiku account
+_raw_cli_db_haiku = _get_raw_env_value("KIRO_CLI_DB_FILE_HAIKU") or os.getenv("KIRO_CLI_DB_FILE_HAIKU", "")
+KIRO_CLI_DB_FILE_HAIKU: str = str(Path(_raw_cli_db_haiku)) if _raw_cli_db_haiku else ""
+
+# Models that should be routed to the haiku account.
+# Matching is case-insensitive substring: if any of these appear in the model name, use haiku account.
+HAIKU_MODEL_PATTERNS: List[str] = ["haiku"]
+
+# ==================================================================================================
 # Kiro API URL Templates
 # ==================================================================================================
 

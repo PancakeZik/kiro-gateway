@@ -265,9 +265,11 @@ class KiroAuthManager:
                             expires_str = token_data['expires_at']
                             # Handle various ISO 8601 formats
                             if expires_str.endswith('Z'):
-                                self._expires_at = datetime.fromisoformat(expires_str.replace('Z', '+00:00'))
-                            else:
-                                self._expires_at = datetime.fromisoformat(expires_str)
+                                expires_str = expires_str.replace('Z', '+00:00')
+                            # Truncate nanosecond precision to microseconds (Python < 3.11 limit)
+                            import re as _re
+                            expires_str = _re.sub(r'(\.\d{6})\d+', r'\1', expires_str)
+                            self._expires_at = datetime.fromisoformat(expires_str)
                         except Exception as e:
                             logger.warning(f"Failed to parse expires_at from SQLite: {e}")
             
