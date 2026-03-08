@@ -283,6 +283,67 @@ def count_tools_tokens(
     return total_tokens
 
 
+def count_kiro_payload_tokens(payload: Dict[str, Any], apply_claude_correction: bool = True) -> int:
+    """
+    Count tokens from a Kiro payload dict by extracting semantic content.
+
+    Walks the Kiro payload structure and counts tokens on the actual text
+    the model will process — message contents, tool definitions, tool results —
+    without JSON envelope overhead (keys, brackets, quotes).
+
+    This gives a more accurate count than tokenizing the serialized JSON string,
+    while still including all skill-injected content.
+
+    Args:
+        payload: Kiro payload dict (before JSON serialization)
+        apply_claude_correction: Apply correction coefficient for Claude (default True)
+
+    Returns:
+        Approximate token count
+    """
+    import json as _json
+
+    total = 0
+
+    conv = payload.get("conversationState", {})
+
+    # History messages
+    for entry in conv.get("history", []):
+        total += 4  # per-message overhead (role, delimiters)
+        if "userInputMessage" in entry:
+            total += count_tokens(entry["userInputMessage"].get("content", ""), apply_claude_correction=False)
+        elif "assistantResponseMessage" in entry:
+            total += count_tokens(entry["assistantResponseMessage"].get("content", ""), apply_claude_correction=False)
+
+    # Current message
+    current = conv.get("currentMessage", {}).get("userInputMessage", {})
+    total += 4
+    total += count_tokens(current.get("content", ""), apply_claude_correction=False)
+
+    # Tools and tool results from userInputMessageContext
+    ctx = current.get("userInputMessageContext", {})
+
+    for tool in ctx.get("tools", []):
+        total += 4  # per-tool overhead
+        total += count_tokens(tool.get("name", ""), apply_claude_correction=False)
+        total += count_tokens(tool.get("description", ""), apply_claude_correction=False)
+        schema = tool.get("inputSchema", {}).get("json", {})
+        if schema:
+            total += count_tokens(_json.dumps(schema, ensure_ascii=False), apply_claude_correction=False)
+
+    for tr in ctx.get("toolResults", []):
+        total += 4
+        total += count_tokens(tr.get("content", ""), apply_claude_correction=False)
+
+    # Images
+    images = current.get("images", [])
+    total += len(images) * IMAGE_TOKEN_ESTIMATE
+
+    if apply_claude_correction:
+        return int(total * CLAUDE_CORRECTION_FACTOR)
+    return total
+
+
 def estimate_request_tokens(
     messages: List[Dict[str, Any]],
     tools: Optional[List[Dict[str, Any]]] = None,

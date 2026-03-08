@@ -46,7 +46,7 @@ from kiro.models_anthropic import (AnthropicErrorDetail,
                                    AnthropicMessagesResponse)
 from kiro.streaming_anthropic import (collect_anthropic_response,
                                       stream_kiro_to_anthropic)
-from kiro.tokenizer import count_payload_tokens
+from kiro.tokenizer import count_kiro_payload_tokens, count_payload_tokens
 from kiro.utils import generate_conversation_id
 
 # Import debug_logger
@@ -309,15 +309,18 @@ async def messages(
     except Exception as e:
         logger.warning(f"Failed to log Kiro request: {e}")
 
-    # Count prompt tokens from the full Kiro payload (what the model actually sees).
-    # This includes skill-injected docs — the client needs the real count to manage
-    # context limits correctly. Under-reporting causes the client to exceed the
-    # model's context window without knowing it.
-    prompt_tokens = count_payload_tokens(
-        kiro_request_body.decode("utf-8", errors="ignore"),
-        apply_claude_correction=False,
-    )
-    logger.debug(f"[Token Count] Payload: {prompt_tokens} tokens")
+    # Count prompt tokens from the Kiro payload's semantic content.
+    # Extracts text from the payload dict (includes skill injections, excludes JSON overhead).
+    # Falls back to raw payload tokenization if extraction fails.
+    try:
+        prompt_tokens = count_kiro_payload_tokens(kiro_payload)
+        logger.debug(f"[Token Count] Kiro semantic: {prompt_tokens} tokens")
+    except Exception as e:
+        logger.warning(f"Kiro semantic token counting failed, falling back to payload: {e}")
+        prompt_tokens = count_payload_tokens(
+            kiro_request_body.decode("utf-8", errors="ignore"),
+        )
+        logger.debug(f"[Token Count] Fallback (payload): {prompt_tokens} tokens")
 
     # Create HTTP client with retry logic
     # For streaming: use per-request client to avoid CLOSE_WAIT leak on VPN disconnect (issue #54)
