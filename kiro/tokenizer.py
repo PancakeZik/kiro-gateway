@@ -317,47 +317,65 @@ def count_kiro_payload_tokens(payload: Dict[str, Any], apply_claude_correction: 
     """
     import json as _json
 
-    total = 0
+    history_content_tokens = 0
+    history_tool_result_tokens = 0
+    current_msg_tokens = 0
+    tools_tokens = 0
+    current_tool_result_tokens = 0
+    image_tokens = 0
 
     conv = payload.get("conversationState", {})
 
     # History messages
+    history_count = 0
     for entry in conv.get("history", []):
-        total += 4  # per-message overhead (role, delimiters)
+        history_count += 1
         if "userInputMessage" in entry:
             uim = entry["userInputMessage"]
-            total += count_tokens(uim.get("content", ""), apply_claude_correction=False)
+            history_content_tokens += 4  # per-message overhead
+            history_content_tokens += count_tokens(uim.get("content", ""), apply_claude_correction=False)
             # Tool results in history
             ctx = uim.get("userInputMessageContext", {})
             for tr in ctx.get("toolResults", []):
-                total += 4
-                total += count_tokens(_extract_tool_result_text(tr), apply_claude_correction=False)
+                history_tool_result_tokens += 4
+                history_tool_result_tokens += count_tokens(_extract_tool_result_text(tr), apply_claude_correction=False)
         elif "assistantResponseMessage" in entry:
-            total += count_tokens(entry["assistantResponseMessage"].get("content", ""), apply_claude_correction=False)
+            history_content_tokens += 4
+            history_content_tokens += count_tokens(entry["assistantResponseMessage"].get("content", ""), apply_claude_correction=False)
 
     # Current message
     current = conv.get("currentMessage", {}).get("userInputMessage", {})
-    total += 4
-    total += count_tokens(current.get("content", ""), apply_claude_correction=False)
+    current_msg_tokens += 4
+    current_msg_tokens += count_tokens(current.get("content", ""), apply_claude_correction=False)
 
     # Tools and tool results from userInputMessageContext
     ctx = current.get("userInputMessageContext", {})
 
     for tool in ctx.get("tools", []):
-        total += 4  # per-tool overhead
-        total += count_tokens(tool.get("name", ""), apply_claude_correction=False)
-        total += count_tokens(tool.get("description", ""), apply_claude_correction=False)
+        tools_tokens += 4  # per-tool overhead
+        tools_tokens += count_tokens(tool.get("name", ""), apply_claude_correction=False)
+        tools_tokens += count_tokens(tool.get("description", ""), apply_claude_correction=False)
         schema = tool.get("inputSchema", {}).get("json", {})
         if schema:
-            total += count_tokens(_json.dumps(schema, ensure_ascii=False), apply_claude_correction=False)
+            tools_tokens += count_tokens(_json.dumps(schema, ensure_ascii=False), apply_claude_correction=False)
 
     for tr in ctx.get("toolResults", []):
-        total += 4
-        total += count_tokens(_extract_tool_result_text(tr), apply_claude_correction=False)
+        current_tool_result_tokens += 4
+        current_tool_result_tokens += count_tokens(_extract_tool_result_text(tr), apply_claude_correction=False)
 
     # Images
     images = current.get("images", [])
-    total += len(images) * IMAGE_TOKEN_ESTIMATE
+    image_tokens = len(images) * IMAGE_TOKEN_ESTIMATE
+
+    total = history_content_tokens + history_tool_result_tokens + current_msg_tokens + tools_tokens + current_tool_result_tokens + image_tokens
+
+    logger.info(
+        f"[Token Breakdown] history_msgs={history_count}, "
+        f"history_content={history_content_tokens}, history_tool_results={history_tool_result_tokens}, "
+        f"current_msg={current_msg_tokens}, tools={tools_tokens}, "
+        f"current_tool_results={current_tool_result_tokens}, images={image_tokens}, "
+        f"total_raw={total}"
+    )
 
     if apply_claude_correction:
         return int(total * CLAUDE_CORRECTION_FACTOR)

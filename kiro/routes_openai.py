@@ -282,7 +282,7 @@ async def chat_completions(request: Request, request_data: ChatCompletionRequest
     prompt_tokens = count_payload_tokens(
         kiro_request_body.decode("utf-8", errors="ignore"),
     )
-    logger.info(f"[Token Count] Payload: {prompt_tokens} tokens, {len(kiro_request_body)} bytes")
+    logger.debug(f"[Token Count] Payload: {prompt_tokens} tokens, {len(kiro_request_body)} bytes")
 
     # Create HTTP client with retry logic
     # For streaming: use per-request client to avoid CLOSE_WAIT leak on VPN disconnect (issue #54)
