@@ -283,6 +283,20 @@ def count_tools_tokens(
     return total_tokens
 
 
+def _extract_tool_result_text(tool_result: Dict[str, Any]) -> str:
+    """Extract text from a Kiro-format tool result's content field."""
+    content = tool_result.get("content", "")
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = []
+        for item in content:
+            if isinstance(item, dict):
+                parts.append(item.get("text", ""))
+        return " ".join(parts)
+    return str(content)
+
+
 def count_kiro_payload_tokens(payload: Dict[str, Any], apply_claude_correction: bool = True) -> int:
     """
     Count tokens from a Kiro payload dict by extracting semantic content.
@@ -311,7 +325,13 @@ def count_kiro_payload_tokens(payload: Dict[str, Any], apply_claude_correction: 
     for entry in conv.get("history", []):
         total += 4  # per-message overhead (role, delimiters)
         if "userInputMessage" in entry:
-            total += count_tokens(entry["userInputMessage"].get("content", ""), apply_claude_correction=False)
+            uim = entry["userInputMessage"]
+            total += count_tokens(uim.get("content", ""), apply_claude_correction=False)
+            # Tool results in history
+            ctx = uim.get("userInputMessageContext", {})
+            for tr in ctx.get("toolResults", []):
+                total += 4
+                total += count_tokens(_extract_tool_result_text(tr), apply_claude_correction=False)
         elif "assistantResponseMessage" in entry:
             total += count_tokens(entry["assistantResponseMessage"].get("content", ""), apply_claude_correction=False)
 
@@ -333,7 +353,7 @@ def count_kiro_payload_tokens(payload: Dict[str, Any], apply_claude_correction: 
 
     for tr in ctx.get("toolResults", []):
         total += 4
-        total += count_tokens(tr.get("content", ""), apply_claude_correction=False)
+        total += count_tokens(_extract_tool_result_text(tr), apply_claude_correction=False)
 
     # Images
     images = current.get("images", [])
