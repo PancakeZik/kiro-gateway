@@ -46,7 +46,7 @@ from kiro.models_anthropic import (AnthropicErrorDetail,
                                    AnthropicMessagesResponse)
 from kiro.streaming_anthropic import (collect_anthropic_response,
                                       stream_kiro_to_anthropic)
-from kiro.tokenizer import count_payload_tokens
+from kiro.tokenizer import count_payload_tokens, estimate_request_tokens
 from kiro.utils import generate_conversation_id
 
 # Import debug_logger
@@ -309,6 +309,53 @@ async def messages(
     except Exception as e:
         logger.warning(f"Failed to log Kiro request: {e}")
 
+    # Count prompt tokens from the semantic content (system + messages + tools).
+    # Converts Anthropic format to simple dicts for estimate_request_tokens,
+    # which counts text content without JSON envelope overhead.
+    try:
+        from kiro.converters_anthropic import convert_anthropic_content_to_text, extract_system_prompt
+        messages_as_dicts = []
+        for msg in request_data.messages:
+            d = {"role": msg.role, "content": convert_anthropic_content_to_text(msg.content)}
+            # Include tool_use blocks as tool_calls for token counting
+            if msg.role == "assistant" and isinstance(msg.content, list):
+                tool_calls = []
+                for block in msg.content:
+                    b = block if isinstance(block, dict) else (block.model_dump() if hasattr(block, "model_dump") else {})
+                    if b.get("type") == "tool_use":
+                        tool_calls.append({
+                            "function": {"name": b.get("name", ""), "arguments": json.dumps(b.get("input", {}))}
+                        })
+                if tool_calls:
+                    d["tool_calls"] = tool_calls
+            messages_as_dicts.append(d)
+
+        tools_as_dicts = None
+        if request_data.tools:
+            tools_as_dicts = [
+                {"type": "function", "function": {
+                    "name": t.name if hasattr(t, "name") else t.get("name", ""),
+                    "description": (t.description if hasattr(t, "description") else t.get("description")) or "",
+                    "parameters": (t.input_schema if hasattr(t, "input_schema") else t.get("input_schema")) or {},
+                }}
+                for t in request_data.tools
+            ]
+
+        system_text = extract_system_prompt(request_data.system)
+        prompt_tokens = estimate_request_tokens(
+            messages=messages_as_dicts,
+            tools=tools_as_dicts,
+            system_prompt=system_text or None,
+        )["total_tokens"]
+        logger.debug(f"[Token Count] Semantic: {prompt_tokens} tokens ({len(request_data.messages)} messages)")
+    except Exception as e:
+        logger.warning(f"Semantic token counting failed, falling back to payload count: {e}")
+        prompt_tokens = count_payload_tokens(
+            kiro_request_body.decode("utf-8", errors="ignore"),
+            apply_claude_correction=False,
+        )
+        logger.debug(f"[Token Count] Fallback (payload): {prompt_tokens} tokens")
+
     # Create HTTP client with retry logic
     # For streaming: use per-request client to avoid CLOSE_WAIT leak on VPN disconnect (issue #54)
     # For non-streaming: use shared client for connection pooling
@@ -323,12 +370,6 @@ async def messages(
         # Non-streaming mode: shared client for efficient connection reuse
         shared_client = request.app.state.http_client
         http_client = KiroHttpClient(auth_manager, shared_client=shared_client)
-
-    # Count prompt tokens from the full Kiro payload (system prompt + messages + tools)
-    kiro_payload_prompt_tokens = count_payload_tokens(
-        kiro_request_body.decode("utf-8", errors="ignore"),
-        apply_claude_correction=False,
-    )
 
     try:
         # Make request to Kiro API (for both streaming and non-streaming modes)
@@ -392,7 +433,7 @@ async def messages(
                         request_data.model,
                         model_cache,
                         auth_manager,
-                        prompt_tokens=kiro_payload_prompt_tokens,
+                        prompt_tokens=prompt_tokens,
                     ):
                         yield chunk
                 except GeneratorExit:
@@ -451,7 +492,7 @@ async def messages(
                 request_data.model,
                 model_cache,
                 auth_manager,
-                prompt_tokens=kiro_payload_prompt_tokens,
+                prompt_tokens=prompt_tokens,
             )
 
             await http_client.close()

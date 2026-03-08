@@ -45,7 +45,7 @@ from kiro.models_openai import ChatCompletionRequest, ModelList, OpenAIModel
 from kiro.streaming_openai import (collect_stream_response,
                                    stream_kiro_to_openai,
                                    stream_with_first_token_retry)
-from kiro.tokenizer import count_payload_tokens
+from kiro.tokenizer import count_payload_tokens, estimate_request_tokens
 from kiro.utils import generate_conversation_id
 
 # Import debug_logger
@@ -279,6 +279,25 @@ async def chat_completions(request: Request, request_data: ChatCompletionRequest
     except Exception as e:
         logger.warning(f"Failed to log Kiro request: {e}")
 
+    # Count prompt tokens from the semantic content (messages + tools).
+    # Uses estimate_request_tokens which counts text content, roles, and tool schemas
+    # without JSON envelope overhead.
+    try:
+        messages_as_dicts = [m.model_dump() for m in request_data.messages]
+        tools_as_dicts = [t.model_dump() for t in request_data.tools] if request_data.tools else None
+        prompt_tokens = estimate_request_tokens(
+            messages=messages_as_dicts,
+            tools=tools_as_dicts,
+        )["total_tokens"]
+        logger.debug(f"[Token Count] Semantic: {prompt_tokens} tokens ({len(request_data.messages)} messages)")
+    except Exception as e:
+        logger.warning(f"Semantic token counting failed, falling back to payload count: {e}")
+        prompt_tokens = count_payload_tokens(
+            kiro_request_body.decode("utf-8", errors="ignore"),
+            apply_claude_correction=False,
+        )
+        logger.debug(f"[Token Count] Fallback (payload): {prompt_tokens} tokens")
+
     # Create HTTP client with retry logic
     # For streaming: use per-request client to avoid CLOSE_WAIT leak on VPN disconnect (issue #54)
     # For non-streaming: use shared client for connection pooling
@@ -347,13 +366,6 @@ async def chat_completions(request: Request, request_data: ChatCompletionRequest
                 },
             )
 
-        # Count prompt tokens from the full Kiro payload (system prompt + messages + tools)
-        # This matches what actually gets sent to the API, giving accurate token counts
-        kiro_payload_prompt_tokens = count_payload_tokens(
-            kiro_request_body.decode("utf-8", errors="ignore"),
-            apply_claude_correction=False,
-        )
-
         if request_data.stream:
             # Streaming mode
             async def stream_wrapper():
@@ -366,7 +378,7 @@ async def chat_completions(request: Request, request_data: ChatCompletionRequest
                         request_data.model,
                         model_cache,
                         auth_manager,
-                        prompt_tokens=kiro_payload_prompt_tokens,
+                        prompt_tokens=prompt_tokens,
                     ):
                         yield chunk
                 except GeneratorExit:
@@ -423,7 +435,7 @@ async def chat_completions(request: Request, request_data: ChatCompletionRequest
                 request_data.model,
                 model_cache,
                 auth_manager,
-                prompt_tokens=kiro_payload_prompt_tokens,
+                prompt_tokens=prompt_tokens,
             )
 
             await http_client.close()
