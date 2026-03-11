@@ -4250,9 +4250,9 @@ class TestBuildKiroHistory:
 
     def test_builds_user_message_with_images(self):
         """
-        What it does: Verifies that images are stripped from history messages.
-        Purpose: Images in history bloat the payload massively (base64). The model
-        already saw and responded to them, so they're omitted from history.
+        What it does: Verifies that images are included in history messages in-context.
+        Purpose: Images should appear at the history turn where they originally appeared
+        so the model sees them in the right position in the conversation.
         """
         print("Setup: User message with images...")
         messages = [
@@ -4273,13 +4273,15 @@ class TestBuildKiroHistory:
         user_msg = result[0]["userInputMessage"]
         print(f"User message: {user_msg}")
 
-        print("Checking that images are NOT in history (stripped to reduce payload)...")
-        assert "images" not in user_msg
+        print("Checking that images ARE in history (in-context placement)...")
+        assert "images" in user_msg
+        assert len(user_msg["images"]) == 1
+        assert user_msg["images"][0]["format"] == "jpeg"
 
     def test_builds_user_message_with_multiple_images(self):
         """
-        What it does: Verifies that multiple images are stripped from history.
-        Purpose: Images in history are omitted to prevent payload bloat.
+        What it does: Verifies that multiple images are included in history in-context.
+        Purpose: Images should appear at the history turn where they originally appeared.
         """
         print("Setup: User message with multiple images...")
         messages = [
@@ -4299,8 +4301,9 @@ class TestBuildKiroHistory:
         print(f"Result: {result}")
         user_msg = result[0]["userInputMessage"]
 
-        print("Checking that images are NOT in history (stripped to reduce payload)...")
-        assert "images" not in user_msg
+        print("Checking that images ARE in history (in-context placement)...")
+        assert "images" in user_msg
+        assert len(user_msg["images"]) == 2
 
     def test_builds_user_message_with_images_and_tool_results(self):
         """
@@ -4330,8 +4333,9 @@ class TestBuildKiroHistory:
         user_msg = result[0]["userInputMessage"]
         context = user_msg.get("userInputMessageContext", {})
 
-        print("Checking that images are NOT in history (stripped to reduce payload)...")
-        assert "images" not in user_msg
+        print("Checking that images ARE in history (in-context placement)...")
+        assert "images" in user_msg
+        assert len(user_msg["images"]) == 1
 
         print("Checking that toolResults are in userInputMessageContext...")
         assert "toolResults" in context
@@ -4364,8 +4368,8 @@ class TestBuildKiroHistory:
 
     def test_builds_user_message_with_webp_image(self):
         """
-        What it does: Verifies that WebP images are stripped from history.
-        Purpose: Images in history are omitted to prevent payload bloat.
+        What it does: Verifies that WebP images are included in history in-context.
+        Purpose: Images should appear at the history turn where they originally appeared.
         """
         print("Setup: User message with WebP image...")
         messages = [
@@ -4382,13 +4386,15 @@ class TestBuildKiroHistory:
         print(f"Result: {result}")
         user_msg = result[0]["userInputMessage"]
 
-        print("Checking that images are NOT in history (stripped to reduce payload)...")
-        assert "images" not in user_msg
+        print("Checking that images ARE in history (in-context placement)...")
+        assert "images" in user_msg
+        assert len(user_msg["images"]) == 1
+        assert user_msg["images"][0]["format"] == "webp"
 
     def test_builds_user_message_with_gif_image(self):
         """
-        What it does: Verifies that GIF images are stripped from history.
-        Purpose: Images in history are omitted to prevent payload bloat.
+        What it does: Verifies that GIF images are included in history in-context.
+        Purpose: Images should appear at the history turn where they originally appeared.
         """
         print("Setup: User message with GIF image...")
         messages = [
@@ -4405,8 +4411,10 @@ class TestBuildKiroHistory:
         print(f"Result: {result}")
         user_msg = result[0]["userInputMessage"]
 
-        print("Checking that images are NOT in history (stripped to reduce payload)...")
-        assert "images" not in user_msg
+        print("Checking that images ARE in history (in-context placement)...")
+        assert "images" in user_msg
+        assert len(user_msg["images"]) == 1
+        assert user_msg["images"][0]["format"] == "gif"
 
 
 # ==================================================================================================
@@ -6113,9 +6121,10 @@ class TestBuildKiroPayloadImages:
 
     def test_includes_images_in_history(self):
         """
-        What it does: Verifies that images are stripped from history messages.
-        Purpose: Images in history bloat the payload massively. The model already
-        saw and responded to them, so they're omitted.
+        What it does: Verifies that images are placed in-context in history messages.
+        Purpose: Images should appear at the history turn where they originally appeared
+        so the model sees them in the right conversational position, not hoisted to the
+        current message.
         """
         print("Setup: Conversation with images in history...")
         messages = [
@@ -6144,9 +6153,17 @@ class TestBuildKiroPayloadImages:
         print(f"History length: {len(history)}")
         assert len(history) >= 1
 
-        print("Checking that first history message does NOT have images (stripped)...")
+        print("Checking that first history message HAS images (in-context placement)...")
         first_msg = history[0]["userInputMessage"]
-        assert "images" not in first_msg
+        assert "images" in first_msg
+        assert len(first_msg["images"]) == 1
+        assert first_msg["images"][0]["format"] == "jpeg"
+
+        print("Checking that current message does NOT have images (not hoisted)...")
+        current_msg = result.payload["conversationState"]["currentMessage"][
+            "userInputMessage"
+        ]
+        assert "images" not in current_msg
 
     def test_images_with_tools(self):
         """

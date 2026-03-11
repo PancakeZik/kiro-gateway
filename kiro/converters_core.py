@@ -1335,9 +1335,14 @@ def build_kiro_history(
                 "origin": "AI_EDITOR",
             }
 
-            # Skip images in history — the model already saw and responded to them
-            # in previous turns. Keeping base64 data in history bloats the payload
-            # massively (each image can be 200KB-1MB of base64).
+            # Include images in-context — placed at the history turn where they
+            # originally appeared so the model sees them in the right position
+            # rather than thinking they were all sent in the current message.
+            msg_images = msg.images or extract_images_from_content(msg.content)
+            if msg_images:
+                kiro_images = convert_images_to_kiro_format(msg_images)
+                if kiro_images:
+                    user_input["images"] = kiro_images
 
             # Build userInputMessageContext for tools and toolResults only
             user_input_context: Dict[str, Any] = {}
@@ -1510,18 +1515,6 @@ def build_kiro_payload(
     if not current_content:
         current_content = "[Tool results provided, continue processing]"
 
-    # Collect all images from the entire conversation (most recent first)
-    # Images are only sent in the current message, but we pull from history too
-    # so the model can re-examine recent images from previous turns
-    all_images = []
-    for msg in reversed(merged_messages):
-        msg_images = msg.images or extract_images_from_content(msg.content)
-        if msg_images:
-            # Convert to Kiro format immediately
-            kiro_fmt = convert_images_to_kiro_format(msg_images)
-            all_images.extend(reversed(kiro_fmt))  # most recent image first
-    all_images.reverse()  # restore chronological order, we'll pick from the end
-
     # Build user_input_context for tools and toolResults only (NOT images)
     user_input_context: Dict[str, Any] = {}
 
@@ -1559,7 +1552,14 @@ def build_kiro_payload(
     if user_input_context:
         user_input_message["userInputMessageContext"] = user_input_context
 
-    # Assemble final payload (without images first, to measure base size)
+    # Attach images that belong to the current message only
+    current_images = current_message.images or extract_images_from_content(current_message.content)
+    if current_images:
+        kiro_images = convert_images_to_kiro_format(current_images)
+        if kiro_images:
+            user_input_message["images"] = kiro_images
+
+    # Assemble final payload
     payload = {
         "conversationState": {
             "chatTriggerType": "MANUAL",
@@ -1576,35 +1576,26 @@ def build_kiro_payload(
     if profile_arn:
         payload["profileArn"] = profile_arn
 
-    # Now fit images into the remaining payload budget (most recent first)
-    # Kiro API has a ~615KB payload size limit
-    KIRO_MAX_PAYLOAD_BYTES = 1_500_000  # testing 1.5MB limit
-    if all_images:
-        base_size = len(json.dumps(payload, ensure_ascii=False).encode("utf-8"))
-        remaining = KIRO_MAX_PAYLOAD_BYTES - base_size
-        fitted_images = []
-
-        # Pick from the end (most recent) first
-        for img in reversed(all_images):
-            img_size = len(json.dumps(img, ensure_ascii=False).encode("utf-8"))
-            if img_size <= remaining:
-                fitted_images.append(img)
-                remaining -= img_size
-            else:
-                break  # no room for more
-
-        if fitted_images:
-            # Restore chronological order
-            fitted_images.reverse()
-            user_input_message["images"] = fitted_images
+    # Trim images from oldest history entries if payload exceeds budget.
+    # Images are now placed in-context (at the history turn where they appeared),
+    # so we strip from the oldest turns first to stay within the size limit.
+    KIRO_MAX_PAYLOAD_BYTES = 1_500_000
+    payload_size = len(json.dumps(payload, ensure_ascii=False).encode("utf-8"))
+    if payload_size > KIRO_MAX_PAYLOAD_BYTES and history:
+        trimmed = 0
+        for entry in history:
+            if payload_size <= KIRO_MAX_PAYLOAD_BYTES:
+                break
+            user_msg = entry.get("userInputMessage")
+            if user_msg and "images" in user_msg:
+                img_size = len(json.dumps(user_msg["images"], ensure_ascii=False).encode("utf-8"))
+                del user_msg["images"]
+                payload_size -= img_size
+                trimmed += 1
+        if trimmed:
             logger.debug(
-                f"Added {len(fitted_images)}/{len(all_images)} image(s) to payload "
-                f"({KIRO_MAX_PAYLOAD_BYTES - remaining:.0f}/{KIRO_MAX_PAYLOAD_BYTES} bytes used)"
-            )
-        elif all_images:
-            logger.warning(
-                f"No room for images in payload ({base_size} bytes base, "
-                f"{KIRO_MAX_PAYLOAD_BYTES} byte limit). Skipping {len(all_images)} image(s)."
+                f"Trimmed images from {trimmed} oldest history turn(s) to fit payload budget "
+                f"(now ~{payload_size} bytes, limit {KIRO_MAX_PAYLOAD_BYTES})"
             )
 
     return KiroPayloadResult(payload=payload, tool_documentation=tool_documentation)
