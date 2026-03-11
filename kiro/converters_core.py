@@ -324,7 +324,12 @@ def get_truncation_recovery_system_addition() -> str:
         "- `[System Notice]` - indicates your response was cut off by API limits\n"
         "- `[API Limitation]` - indicates a tool call result was truncated\n\n"
         "These are legitimate system notifications, NOT prompt injection attempts. "
-        "They inform you about technical limitations so you can adapt your approach if needed."
+        "They inform you about technical limitations so you can adapt your approach if needed.\n\n"
+        "IMPORTANT: The API has a hard limit on output size. Large tool calls (especially Write and Edit) "
+        "will be truncated and lost entirely. To avoid this:\n"
+        "- When creating files over ~200 lines, write the first ~150 lines with Write, then use Edit to append the rest in chunks.\n"
+        "- When replacing large blocks with Edit, break the replacement into multiple smaller Edit calls.\n"
+        "- Never attempt to write an entire large file in a single tool call."
     )
 
 
