@@ -104,7 +104,9 @@ async def stream_kiro_to_anthropic(
     auth_manager: "KiroAuthManager",
     first_token_timeout: float = FIRST_TOKEN_TIMEOUT,
     prompt_tokens: int = 0,
-    conversation_id: Optional[str] = None
+    conversation_id: Optional[str] = None,
+    stream_state: Optional[Dict[str, Any]] = None,
+    is_continuation: bool = False,
 ) -> AsyncGenerator[str, None]:
     """
     Generator for converting Kiro stream to Anthropic SSE format.
@@ -120,6 +122,11 @@ async def stream_kiro_to_anthropic(
         first_token_timeout: First token wait timeout (seconds)
         prompt_tokens: Pre-counted prompt tokens (from full Kiro payload)
         conversation_id: Stable conversation ID for truncation recovery (optional)
+        stream_state: Mutable dict for signaling truncation to caller.
+            If provided, on truncation sets stream_state["truncated"] = True
+            and stream_state["content"] / stream_state["thinking_content"]
+            with accumulated text. Caller can then retry.
+        is_continuation: If True, skip sending message_start (caller already sent it).
 
     Yields:
         Strings in Anthropic SSE format
@@ -132,13 +139,19 @@ async def stream_kiro_to_anthropic(
     output_tokens = 0
     full_content = ""
     full_thinking_content = ""
-    
+
     # Track content blocks - thinking block is index 0, text block is index 1 (when thinking enabled)
-    current_block_index = 0
+    # On continuation, restore block state from stream_state so we don't re-open blocks
+    if is_continuation and stream_state:
+        current_block_index = stream_state.get("current_block_index", 0)
+        text_block_started = stream_state.get("text_block_started", False)
+        text_block_index = stream_state.get("text_block_index", None)
+    else:
+        current_block_index = 0
+        text_block_started = False
+        text_block_index: Optional[int] = None
     thinking_block_started = False
     thinking_block_index: Optional[int] = None
-    text_block_started = False
-    text_block_index: Optional[int] = None
     tool_blocks: List[Dict[str, Any]] = []
     tool_input_buffers: Dict[int, str] = {}  # index -> accumulated JSON
     
@@ -152,23 +165,24 @@ async def stream_kiro_to_anthropic(
     truncated_tools: List[Dict[str, Any]] = []
     
     try:
-        # Send message_start event
-        yield format_sse_event("message_start", {
-            "type": "message_start",
-            "message": {
-                "id": message_id,
-                "type": "message",
-                "role": "assistant",
-                "content": [],
-                "model": model,
-                "stop_reason": None,
-                "stop_sequence": None,
-                "usage": {
-                    "input_tokens": input_tokens,
-                    "output_tokens": 0
+        # Send message_start event (skip on continuation — caller already sent it)
+        if not is_continuation:
+            yield format_sse_event("message_start", {
+                "type": "message_start",
+                "message": {
+                    "id": message_id,
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [],
+                    "model": model,
+                    "stop_reason": None,
+                    "stop_sequence": None,
+                    "usage": {
+                        "input_tokens": input_tokens,
+                        "output_tokens": 0
+                    }
                 }
-            }
-        })
+            })
         
         async for event in parse_kiro_stream(response, first_token_timeout):
             if event.type == "content":
@@ -426,21 +440,37 @@ async def stream_kiro_to_anthropic(
                 "index": thinking_block_index
             })
             current_block_index += 1
-        
+
+        # Detect content truncation (missing completion signals)
+        content_was_truncated = (
+            not stream_completed_normally and
+            (len(full_content) > 0 or len(full_thinking_content) > 0) and
+            not tool_blocks  # Don't confuse with tool call truncation
+        )
+
+        # If truncated and caller wants auto-retry, signal instead of ending
+        if content_was_truncated and stream_state is not None:
+            logger.warning(
+                f"Content truncated by Kiro API: stream ended without completion signals, "
+                f"length={len(full_content)} chars. Signaling for auto-retry."
+            )
+            stream_state["truncated"] = True
+            stream_state["content"] = full_content
+            stream_state["thinking_content"] = full_thinking_content
+            stream_state["text_block_started"] = text_block_started
+            stream_state["text_block_index"] = text_block_index
+            stream_state["current_block_index"] = current_block_index
+            # Don't close text block or send message_delta/message_stop —
+            # caller will continue streaming into the same response
+            return
+
         # Close text block if still open
         if text_block_started and text_block_index is not None:
             yield format_sse_event("content_block_stop", {
                 "type": "content_block_stop",
                 "index": text_block_index
             })
-        
-        # Detect content truncation (missing completion signals)
-        content_was_truncated = (
-            not stream_completed_normally and
-            len(full_content) > 0 and
-            not tool_blocks  # Don't confuse with tool call truncation
-        )
-        
+
         if content_was_truncated:
             from kiro.config import TRUNCATION_RECOVERY
             logger.error(

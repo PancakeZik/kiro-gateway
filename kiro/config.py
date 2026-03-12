@@ -332,6 +332,14 @@ TOOL_DESCRIPTION_MAX_LENGTH: int = int(os.getenv("TOOL_DESCRIPTION_MAX_LENGTH", 
 # Default: true (enabled)
 TRUNCATION_RECOVERY: bool = os.getenv("TRUNCATION_RECOVERY", "true").lower() in ("true", "1", "yes")
 
+# Auto-retry on stream truncation.
+# When enabled, if the upstream API cuts a stream short, the gateway automatically
+# makes a continuation request with the truncated content and keeps streaming.
+# Useful for subagents that can't manually intervene.
+# Max 3 total attempts (1 original + 2 retries).
+# Default: true (enabled)
+TRUNCATION_AUTO_RETRY: bool = os.getenv("TRUNCATION_AUTO_RETRY", "true").lower() in ("true", "1", "yes")
+
 # ==================================================================================================
 # Logging Settings
 # ==================================================================================================

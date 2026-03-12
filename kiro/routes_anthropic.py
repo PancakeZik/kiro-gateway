@@ -42,9 +42,11 @@ from kiro.converters_anthropic import anthropic_to_kiro
 from kiro.http_client import KiroHttpClient
 from kiro.models_anthropic import (AnthropicErrorDetail,
                                    AnthropicErrorResponse,
+                                   AnthropicMessage,
                                    AnthropicMessagesRequest,
                                    AnthropicMessagesResponse)
 from kiro.streaming_anthropic import (collect_anthropic_response,
+                                      format_sse_event,
                                       stream_kiro_to_anthropic)
 from kiro.tokenizer import count_payload_tokens, count_tokens
 from kiro.utils import generate_conversation_id
@@ -385,18 +387,143 @@ async def messages(
 
         if request_data.stream:
             # Streaming mode - Kiro already returned 200, now stream the response
+            # Auto-retry on truncation (if enabled)
+            from kiro.config import TRUNCATION_AUTO_RETRY
+            MAX_TRUNCATION_RETRIES = 2 if TRUNCATION_AUTO_RETRY else 0
+
             async def stream_wrapper():
                 streaming_error = None
                 client_disconnected = False
+                current_response = response
+                current_http_client = http_client
+                accumulated_content = ""
+                accumulated_thinking = ""
+
                 try:
-                    async for chunk in stream_kiro_to_anthropic(
-                        response,
-                        request_data.model,
-                        model_cache,
-                        auth_manager,
-                        prompt_tokens=prompt_tokens,
-                    ):
-                        yield chunk
+                    for attempt in range(1 + MAX_TRUNCATION_RETRIES):
+                        stream_state = {"truncated": False}
+                        is_continuation = attempt > 0
+
+                        async for chunk in stream_kiro_to_anthropic(
+                            current_response,
+                            request_data.model,
+                            model_cache,
+                            auth_manager,
+                            prompt_tokens=prompt_tokens,
+                            stream_state=stream_state,
+                            is_continuation=is_continuation,
+                        ):
+                            yield chunk
+
+                        # Check if stream was truncated
+                        if not stream_state.get("truncated"):
+                            break  # Normal completion
+
+                        # Accumulate content across retries
+                        accumulated_content += stream_state.get("content", "")
+                        accumulated_thinking += stream_state.get("thinking_content", "")
+
+                        if attempt >= MAX_TRUNCATION_RETRIES:
+                            logger.warning(
+                                f"Truncation auto-retry exhausted after {attempt + 1} attempts. "
+                                f"Ending stream with {len(accumulated_content)} chars."
+                            )
+                            break
+
+                        logger.info(
+                            f"Truncation auto-retry: attempt {attempt + 2}/{1 + MAX_TRUNCATION_RETRIES} "
+                            f"({len(accumulated_content)} chars so far)"
+                        )
+
+                        # Close previous response/client before making new request
+                        try:
+                            await current_http_client.close()
+                        except Exception:
+                            pass
+
+                        # Build continuation request:
+                        # Original messages + truncated assistant message + "continue" user message
+                        from copy import deepcopy
+                        continuation_request = deepcopy(request_data)
+                        if accumulated_content:
+                            continuation_request.messages.append(
+                                AnthropicMessage(
+                                    role="assistant",
+                                    content=accumulated_content,
+                                )
+                            )
+                            continuation_request.messages.append(
+                                AnthropicMessage(
+                                    role="user",
+                                    content=(
+                                        "[System Notice] Your previous response was cut off mid-stream "
+                                        "due to an API limitation. This is not your fault. "
+                                        "Continue exactly from where you left off."
+                                    ),
+                                )
+                            )
+                        else:
+                            # Only thinking was truncated, no visible content yet.
+                            # Just retry the same turn — model will regenerate.
+                            continuation_request.messages.append(
+                                AnthropicMessage(
+                                    role="user",
+                                    content=(
+                                        "[System Notice] Your previous response was cut off before any "
+                                        "content was produced due to an API limitation. "
+                                        "This is not your fault. Please try again."
+                                    ),
+                                )
+                            )
+
+                        # Build new Kiro payload
+                        try:
+                            continuation_payload = anthropic_to_kiro(
+                                continuation_request, conversation_id, profile_arn_for_payload
+                            )
+                        except ValueError as e:
+                            logger.error(f"Failed to build continuation payload: {e}")
+                            break
+
+                        # Make new API request
+                        current_http_client = KiroHttpClient(auth_manager, shared_client=None)
+                        try:
+                            current_response = await current_http_client.request_with_retry(
+                                "POST", url, continuation_payload, stream=True
+                            )
+                            if current_response.status_code != 200:
+                                logger.error(
+                                    f"Continuation request failed: HTTP {current_response.status_code}"
+                                )
+                                break
+                        except Exception as e:
+                            logger.error(f"Continuation request error: {e}")
+                            break
+
+                    # If the last attempt was truncated (retries exhausted or error),
+                    # we need to close the open blocks and end the stream properly
+                    if stream_state.get("truncated"):
+                        # Close text block if still open
+                        if stream_state.get("text_block_started") and stream_state.get("text_block_index") is not None:
+                            yield format_sse_event("content_block_stop", {
+                                "type": "content_block_stop",
+                                "index": stream_state["text_block_index"]
+                            })
+                        # Send message_delta and message_stop
+                        yield format_sse_event("message_delta", {
+                            "type": "message_delta",
+                            "delta": {
+                                "stop_reason": "end_turn",
+                                "stop_sequence": None
+                            },
+                            "usage": {
+                                "output_tokens": 0
+                            }
+                        })
+                        yield format_sse_event("message_stop", {
+                            "type": "message_stop"
+                        })
+
                 except GeneratorExit:
                     client_disconnected = True
                     logger.debug(
@@ -411,7 +538,7 @@ async def messages(
                     except Exception:
                         pass
                 finally:
-                    await http_client.close()
+                    await current_http_client.close()
                     if streaming_error:
                         error_type = type(streaming_error).__name__
                         error_msg = (
