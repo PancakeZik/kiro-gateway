@@ -107,6 +107,7 @@ async def stream_kiro_to_anthropic(
     conversation_id: Optional[str] = None,
     stream_state: Optional[Dict[str, Any]] = None,
     is_continuation: bool = False,
+    block_index_offset: int = 0,
 ) -> AsyncGenerator[str, None]:
     """
     Generator for converting Kiro stream to Anthropic SSE format.
@@ -127,6 +128,8 @@ async def stream_kiro_to_anthropic(
             and stream_state["content"] / stream_state["thinking_content"]
             with accumulated text. Caller can then retry.
         is_continuation: If True, skip sending message_start (caller already sent it).
+        block_index_offset: Starting index for content blocks (used when search
+            indicator blocks are prepended before the main stream).
 
     Yields:
         Strings in Anthropic SSE format
@@ -147,7 +150,7 @@ async def stream_kiro_to_anthropic(
         text_block_started = stream_state.get("text_block_started", False)
         text_block_index = stream_state.get("text_block_index", None)
     else:
-        current_block_index = 0
+        current_block_index = block_index_offset
         text_block_started = False
         text_block_index: Optional[int] = None
     thinking_block_started = False

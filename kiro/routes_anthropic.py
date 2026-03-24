@@ -50,6 +50,13 @@ from kiro.streaming_anthropic import (collect_anthropic_response,
                                       stream_kiro_to_anthropic)
 from kiro.tokenizer import count_payload_tokens, count_tokens
 from kiro.utils import generate_conversation_id
+from kiro.websearch import (
+    build_search_indicator_events,
+    extract_search_query,
+    find_web_search_tool,
+    inject_search_into_messages,
+    mcp_web_search,
+)
 
 # Import debug_logger
 try:
@@ -281,6 +288,64 @@ async def messages(
     # Generate conversation ID for Kiro API (random UUID, not used for tracking)
     conversation_id = generate_conversation_id()
 
+    # --- Web Search interception ---
+    # Detect web_search server tool, perform search via MCP, inject results
+    web_search_indicators = []  # list of (tool_use_id, query, results) for response injection
+    if request_data.tools:
+        # Convert Pydantic models to dicts for websearch detection
+        raw_tools = [t.model_dump(exclude_none=True) for t in request_data.tools]
+        ws_tool = find_web_search_tool(raw_tools)
+        if ws_tool:
+            query = extract_search_query(
+                [m.model_dump(exclude_none=True) for m in request_data.messages]
+            )
+            if query:
+                logger.info(f"[websearch] Intercepted web_search: '{query[:80]}'")
+                token = await auth_manager.get_access_token()
+                from kiro.utils import get_kiro_headers
+                mcp_headers = get_kiro_headers(auth_manager, token)
+                tool_use_id, results = await mcp_web_search(
+                    query=query,
+                    api_host=auth_manager.api_host,
+                    headers=mcp_headers,
+                    http_client=request.app.state.http_client,
+                )
+                web_search_indicators.append((tool_use_id, query, results))
+
+                # Inject search results into messages so the model sees them
+                raw_messages = [m.model_dump(exclude_none=True) for m in request_data.messages]
+                updated_messages = inject_search_into_messages(
+                    raw_messages, tool_use_id, query, results
+                )
+                request_data.messages = [
+                    AnthropicMessage(**m) for m in updated_messages
+                ]
+
+                # Keep a minimal web_search tool so the model can re-search,
+                # but remove the server-side tool type that Kiro doesn't understand
+                from kiro.models_anthropic import AnthropicTool
+                remaining_tools = [
+                    t for t in request_data.tools
+                    if not (
+                        (t.type or "").startswith("web_search")
+                        or (t.name == "web_search" and not t.input_schema)
+                    )
+                ]
+                remaining_tools.append(AnthropicTool(
+                    name="web_search",
+                    description="Search the web for information. Use when previous results are insufficient.",
+                    input_schema={
+                        "type": "object",
+                        "properties": {
+                            "query": {"type": "string", "description": "The search query"},
+                        },
+                        "required": ["query"],
+                    },
+                ))
+                request_data.tools = remaining_tools
+            else:
+                logger.warning("[websearch] web_search tool found but no query extracted")
+
     # Build payload for Kiro
     # profileArn is only needed for Kiro Desktop auth
     profile_arn_for_payload = ""
@@ -399,10 +464,49 @@ async def messages(
                 accumulated_content = ""
                 accumulated_thinking = ""
 
+                # Track block index offset for web search indicators
+                ws_block_offset = 0
+
                 try:
+                    # If we have web search results, emit message_start + indicator blocks
+                    # before the main stream (which will use is_continuation=True)
+                    if web_search_indicators:
+                        from kiro.streaming_anthropic import generate_message_id
+                        msg_id = generate_message_id()
+                        yield format_sse_event("message_start", {
+                            "type": "message_start",
+                            "message": {
+                                "id": msg_id,
+                                "type": "message",
+                                "role": "assistant",
+                                "content": [],
+                                "model": request_data.model,
+                                "stop_reason": None,
+                                "stop_sequence": None,
+                                "usage": {"input_tokens": prompt_tokens, "output_tokens": 0},
+                            },
+                        })
+
+                        for tool_use_id, query, results in web_search_indicators:
+                            blocks, next_idx = build_search_indicator_events(
+                                tool_use_id, query, results, start_index=ws_block_offset
+                            )
+                            for i, block in enumerate(blocks):
+                                idx = ws_block_offset + i
+                                yield format_sse_event("content_block_start", {
+                                    "type": "content_block_start",
+                                    "index": idx,
+                                    "content_block": block,
+                                })
+                                yield format_sse_event("content_block_stop", {
+                                    "type": "content_block_stop",
+                                    "index": idx,
+                                })
+                            ws_block_offset = next_idx
+
                     for attempt in range(1 + MAX_TRUNCATION_RETRIES):
                         stream_state = {"truncated": False}
-                        is_continuation = attempt > 0
+                        is_continuation = attempt > 0 or ws_block_offset > 0
 
                         async for chunk in stream_kiro_to_anthropic(
                             current_response,
@@ -412,6 +516,7 @@ async def messages(
                             prompt_tokens=prompt_tokens,
                             stream_state=stream_state,
                             is_continuation=is_continuation,
+                            block_index_offset=ws_block_offset,
                         ):
                             yield chunk
 
@@ -584,6 +689,15 @@ async def messages(
             )
 
             await http_client.close()
+
+            # Inject web search indicators into non-streaming response
+            if web_search_indicators and isinstance(anthropic_response, dict):
+                existing_content = anthropic_response.get("content", [])
+                prefix_blocks = []
+                for tool_use_id, query, results in web_search_indicators:
+                    blocks, _ = build_search_indicator_events(tool_use_id, query, results)
+                    prefix_blocks.extend(blocks)
+                anthropic_response["content"] = prefix_blocks + existing_content
 
             logger.info(f"HTTP 200 - POST /v1/messages (non-streaming) - completed")
 

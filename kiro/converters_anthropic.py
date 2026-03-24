@@ -355,12 +355,20 @@ def convert_anthropic_tools(
         # Handle both dict and Pydantic model
         if isinstance(tool, dict):
             name = tool.get("name", "")
+            tool_type = tool.get("type", "")
             description = tool.get("description")
             input_schema = tool.get("input_schema", {})
         else:
-            name = tool.name
+            name = tool.name or ""
+            tool_type = tool.type or ""
             description = tool.description
-            input_schema = tool.input_schema
+            input_schema = tool.input_schema or {}
+
+        # Skip server-side tools (e.g. web_search_20250305) — they have no
+        # name/input_schema and are handled separately via MCP
+        if tool_type.startswith("web_search") or (name == "web_search" and not input_schema):
+            logger.debug(f"Skipping server-side tool: type={tool_type}, name={name}")
+            continue
 
         unified_tools.append(
             UnifiedTool(name=name, description=description, input_schema=input_schema)

@@ -1071,31 +1071,30 @@ class TestAnthropicTool:
 
     def test_requires_name(self):
         """
-        What it does: Verifies that name is required.
-        Purpose: Ensure validation fails without name.
+        What it does: Verifies that name is optional (for server-side tools like web_search).
+        Purpose: Server-side tools use type instead of name.
         """
-        print("Setup: Attempting to create AnthropicTool without name...")
+        print("Setup: Creating AnthropicTool without name (server-side tool)...")
 
-        print("Action: Creating model (should raise ValidationError)...")
-        with pytest.raises(ValidationError) as exc_info:
-            AnthropicTool(input_schema={})
+        print("Action: Creating model (should succeed for server-side tools)...")
+        tool = AnthropicTool(type="web_search_20250305")
 
-        print(f"ValidationError raised: {exc_info.value}")
-        assert "name" in str(exc_info.value)
+        print(f"Comparing name: Expected None, Got {tool.name}")
+        assert tool.name is None
+        assert tool.type == "web_search_20250305"
 
     def test_requires_input_schema(self):
         """
-        What it does: Verifies that input_schema is required.
-        Purpose: Ensure validation fails without input_schema.
+        What it does: Verifies that input_schema is optional (for server-side tools like web_search).
+        Purpose: Server-side tools don't have input_schema.
         """
-        print("Setup: Attempting to create AnthropicTool without input_schema...")
+        print("Setup: Creating AnthropicTool without input_schema...")
 
-        print("Action: Creating model (should raise ValidationError)...")
-        with pytest.raises(ValidationError) as exc_info:
-            AnthropicTool(name="test")
+        print("Action: Creating model (should succeed for server-side tools)...")
+        tool = AnthropicTool(name="test")
 
-        print(f"ValidationError raised: {exc_info.value}")
-        assert "input_schema" in str(exc_info.value)
+        print(f"Comparing input_schema: Expected None, Got {tool.input_schema}")
+        assert tool.input_schema is None
 
     def test_description_is_optional(self):
         """
