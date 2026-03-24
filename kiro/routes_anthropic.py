@@ -776,7 +776,7 @@ async def count_tokens_endpoint(
 
     # Count tokens from the full serialized Kiro payload (same as messages endpoint)
     kiro_request_body = json.dumps(kiro_payload, ensure_ascii=False, indent=2)
-    input_tokens = count_tokens(kiro_request_body, apply_claude_correction=False)
+    input_tokens = count_payload_tokens(kiro_request_body)
 
     logger.info(f"Token count estimate: {input_tokens} (payload size: {len(kiro_request_body)} chars)")
 
