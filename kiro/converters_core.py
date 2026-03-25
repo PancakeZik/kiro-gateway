@@ -329,7 +329,9 @@ def get_truncation_recovery_system_addition() -> str:
         "will be truncated and lost entirely. To avoid this:\n"
         "- When creating files over ~200 lines, write the first ~150 lines with Write, then use Edit to append the rest in chunks.\n"
         "- When replacing large blocks with Edit, break the replacement into multiple smaller Edit calls.\n"
-        "- Never attempt to write an entire large file in a single tool call."
+        "- Never attempt to write an entire large file in a single tool call.\n\n"
+        "IMPORTANT: The API has a hard limit of 10 images per message turn. "
+        "If you need to read more than 10 images, split them across multiple turns."
     )
 
 
@@ -624,6 +626,15 @@ def convert_images_to_kiro_format(
     """
     if not images:
         return []
+
+    # Kiro API hard limit: max 10 images per message turn (tested 2026-03-25)
+    KIRO_MAX_IMAGES_PER_TURN = 10
+    if len(images) > KIRO_MAX_IMAGES_PER_TURN:
+        logger.warning(
+            f"Trimming images from {len(images)} to {KIRO_MAX_IMAGES_PER_TURN} per turn "
+            f"(Kiro API limit). Keeping most recent."
+        )
+        images = images[-KIRO_MAX_IMAGES_PER_TURN:]
 
     kiro_images = []
     for img in images:
@@ -1581,26 +1592,12 @@ def build_kiro_payload(
     if profile_arn:
         payload["profileArn"] = profile_arn
 
-    # Trim images from oldest history entries if payload exceeds budget.
-    # Images are now placed in-context (at the history turn where they appeared),
-    # so we strip from the oldest turns first to stay within the size limit.
-    KIRO_MAX_PAYLOAD_BYTES = 1_500_000
-    payload_size = len(json.dumps(payload, ensure_ascii=False).encode("utf-8"))
-    if payload_size > KIRO_MAX_PAYLOAD_BYTES and history:
-        trimmed = 0
-        for entry in history:
-            if payload_size <= KIRO_MAX_PAYLOAD_BYTES:
-                break
-            user_msg = entry.get("userInputMessage")
-            if user_msg and "images" in user_msg:
-                img_size = len(json.dumps(user_msg["images"], ensure_ascii=False).encode("utf-8"))
-                del user_msg["images"]
-                payload_size -= img_size
-                trimmed += 1
-        if trimmed:
-            logger.debug(
-                f"Trimmed images from {trimmed} oldest history turn(s) to fit payload budget "
-                f"(now ~{payload_size} bytes, limit {KIRO_MAX_PAYLOAD_BYTES})"
-            )
+    # Image limits are handled by the per-turn cap in convert_images_to_kiro_format()
+    # (max 10 images per turn, tested 2026-03-25).
+    #
+    # The Kiro API text payload limit is ~5.65MB (tested 2026-03-25 with 1M context).
+    # Image payloads are NOT counted against this — 10.9MB with images was accepted.
+    # Text-only payloads exceeding 5.65MB will get CONTENT_LENGTH_EXCEEDS_THRESHOLD
+    # from the API, which is surfaced to the user as a clear error.
 
     return KiroPayloadResult(payload=payload, tool_documentation=tool_documentation)

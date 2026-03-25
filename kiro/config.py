@@ -297,7 +297,7 @@ FALLBACK_MODELS: List[Dict[str, str]] = [
 MODEL_CACHE_TTL: int = 3600
 
 # Default maximum number of input tokens
-DEFAULT_MAX_INPUT_TOKENS: int = 200000
+DEFAULT_MAX_INPUT_TOKENS: int = 1000000
 
 # ==================================================================================================
 # Tool Description Handling (Kiro API Limitations)
