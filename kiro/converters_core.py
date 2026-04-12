@@ -1451,6 +1451,18 @@ def build_kiro_payload(
             else tool_documentation.strip()
         )
 
+    # Inject thinking tags into system prompt (not user message) for better reasoning
+    if inject_thinking and FAKE_REASONING_ENABLED:
+        thinking_prefix = (
+            f"<thinking_mode>enabled</thinking_mode>\n"
+            f"<max_thinking_length>{FAKE_REASONING_MAX_TOKENS}</max_thinking_length>"
+        )
+        full_system_prompt = (
+            thinking_prefix + "\n\n" + full_system_prompt
+            if full_system_prompt
+            else thinking_prefix
+        )
+
     # Add thinking mode legitimization to system prompt if enabled
     thinking_system_addition = get_thinking_system_prompt_addition()
     if thinking_system_addition:
@@ -1553,9 +1565,8 @@ def build_kiro_payload(
         if tool_results:
             user_input_context["toolResults"] = tool_results
 
-    # Inject thinking tags if enabled (only for the current/last user message)
-    if inject_thinking and current_message.role == "user":
-        current_content = inject_thinking_tags(current_content)
+    # Thinking injection is now done via system prompt above (not user message)
+    # This produces better reasoning quality based on testing.
 
     # Build userInputMessage
     user_input_message = {
