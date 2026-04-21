@@ -171,7 +171,7 @@ async def messages(
     # Track request for usage monitoring
     usage_monitor = getattr(request.app.state, "usage_monitor", None)
     if usage_monitor:
-        usage_monitor.increment(usage_account)
+        usage_monitor.increment(usage_account, request_data.model)
 
     # Note: prepare_new_request() and log_request_body() are now called by DebugLoggerMiddleware
     # This ensures debug logging works even for requests that fail Pydantic validation (422 errors)

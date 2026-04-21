@@ -114,16 +114,27 @@ class LocalUsageCounter:
             return 0
         return entry.get("count", 0)
 
-    def increment(self, account: str) -> int:
+    def increment(self, account: str, model: str = "") -> int:
         """Increment and persist. Returns new count."""
         cycle = self._current_cycle()
         entry = self._data.get(account, {})
         if entry.get("billing_cycle") != cycle:
-            entry = {"count": 0, "billing_cycle": cycle}
+            entry = {"count": 0, "billing_cycle": cycle, "models": {}}
         entry["count"] = entry.get("count", 0) + 1
+        if model:
+            models = entry.get("models", {})
+            models[model] = models.get(model, 0) + 1
+            entry["models"] = models
         self._data[account] = entry
         self._save()
         return entry["count"]
+
+    def get_model_breakdown(self, account: str) -> dict[str, int]:
+        """Get per-model request counts for an account in the current cycle."""
+        entry = self._data.get(account, {})
+        if entry.get("billing_cycle") != self._current_cycle():
+            return {}
+        return entry.get("models", {})
 
 
 @dataclass
@@ -315,12 +326,20 @@ def _format_usage_log(account: AccountMonitor, local_counter: Optional[LocalUsag
         bar = f"{bar_color}{'█' * filled}{DIM}{'░' * empty}{RESET}"
         cycle = local_counter._current_cycle()
 
+        # Per-model breakdown
+        models = local_counter.get_model_breakdown(account.name)
+        model_str = ""
+        if models:
+            sorted_models = sorted(models.items(), key=lambda x: x[1], reverse=True)
+            model_str = f"\n    {DIM}models: " + ", ".join(f"{m}: {c}" for m, c in sorted_models) + RESET
+
         return (
             f"{MAGENTA}{BOLD}📊 Usage [{account.name}]{RESET} "
             f"{bar} "
             f"{bar_color}{BOLD}{pct:.1f}%{RESET} "
             f"({count}/{limit} requests)"
             f"{DIM} | local counter | cycle {cycle}{RESET}"
+            f"{model_str}"
         )
 
     if u.error:
@@ -472,14 +491,14 @@ class UsageMonitor:
         """Register an account to monitor. Set local_limit for accounts without API usage tracking."""
         self._accounts[name] = AccountMonitor(name=name, auth_manager=auth_manager, local_limit=local_limit)
 
-    def increment(self, account_name: str) -> None:
+    def increment(self, account_name: str, model: str = "") -> None:
         """Increment request counter for an account. Call from route handlers."""
         acct = self._accounts.get(account_name)
         if acct:
             acct.request_count += 1
             # Also increment persistent local counter for accounts that use it
             if acct.local_limit > 0 or acct.disabled:
-                self._local_counter.increment(account_name)
+                self._local_counter.increment(account_name, model)
 
     def get_usage(self, account_name: str) -> Optional[UsageInfo]:
         """Get cached usage info for an account."""
