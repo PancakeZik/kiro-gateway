@@ -360,19 +360,20 @@ class TestStreamKiroToAnthropic:
         
         async def mock_parse_kiro_stream(*args, **kwargs):
             yield KiroEvent(type="content", content="Hello")
-        
+            yield KiroEvent(type="context_usage", context_usage_percentage=5.0)
+
         print("Action: Streaming to Anthropic format...")
         events = []
-        
+
         with patch('kiro.streaming_anthropic.parse_kiro_stream', mock_parse_kiro_stream):
             with patch('kiro.streaming_anthropic.parse_bracket_tool_calls', return_value=[]):
                 async for event in stream_kiro_to_anthropic(
                     mock_response, "claude-sonnet-4", mock_model_cache, mock_auth_manager
                 ):
                     events.append(event)
-        
+
         print(f"Received {len(events)} events")
-        
+
         # Should have message_delta with stop_reason
         message_delta_events = [e for e in events if "message_delta" in e]
         assert len(message_delta_events) >= 1

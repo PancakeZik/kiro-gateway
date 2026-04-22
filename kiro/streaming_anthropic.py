@@ -489,7 +489,12 @@ async def stream_kiro_to_anthropic(
         # Don't override with contextUsagePercentage — it's unreliable.
         
         # Determine stop reason
-        stop_reason = "tool_use" if tool_blocks else "end_turn"
+        if tool_blocks:
+            stop_reason = "tool_use"
+        elif content_was_truncated:
+            stop_reason = "max_tokens"
+        else:
+            stop_reason = "end_turn"
         
         # Send message_delta with stop_reason and usage
         yield format_sse_event("message_delta", {

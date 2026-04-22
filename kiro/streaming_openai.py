@@ -216,7 +216,12 @@ async def stream_kiro_to_openai_internal(
             )
         
         # Determine finish_reason
-        finish_reason = "tool_calls" if all_tool_calls else "stop"
+        if all_tool_calls:
+            finish_reason = "tool_calls"
+        elif content_was_truncated:
+            finish_reason = "length"
+        else:
+            finish_reason = "stop"
         
         # Count completion_tokens (output) using tiktoken
         completion_tokens = count_tokens(full_content + full_thinking_content)
@@ -491,6 +496,7 @@ async def collect_stream_response(
     full_reasoning_content = ""
     final_usage = None
     tool_calls = []
+    stream_finish_reason = None
     completion_id = generate_completion_id()
 
     async for chunk_str in stream_kiro_to_openai(
@@ -503,27 +509,31 @@ async def collect_stream_response(
     ):
         if not chunk_str.startswith("data:"):
             continue
-        
+
         data_str = chunk_str[len("data:"):].strip()
         if not data_str or data_str == "[DONE]":
             continue
-        
+
         try:
             chunk_data = json.loads(data_str)
-            
+
             # Extract data from chunk
-            delta = chunk_data.get("choices", [{}])[0].get("delta", {})
+            choice = chunk_data.get("choices", [{}])[0]
+            delta = choice.get("delta", {})
             if "content" in delta:
                 full_content += delta["content"]
             if "reasoning_content" in delta:
                 full_reasoning_content += delta["reasoning_content"]
             if "tool_calls" in delta:
                 tool_calls.extend(delta["tool_calls"])
-            
+
+            if choice.get("finish_reason"):
+                stream_finish_reason = choice["finish_reason"]
+
             # Save usage from last chunk
             if "usage" in chunk_data:
                 final_usage = chunk_data["usage"]
-                
+
         except (json.JSONDecodeError, IndexError):
             continue
     
@@ -549,7 +559,7 @@ async def collect_stream_response(
             cleaned_tool_calls.append(cleaned_tc)
         message["tool_calls"] = cleaned_tool_calls
     
-    finish_reason = "tool_calls" if tool_calls else "stop"
+    finish_reason = stream_finish_reason or ("tool_calls" if tool_calls else "stop")
     
     # Form usage for response
     usage = final_usage or {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}

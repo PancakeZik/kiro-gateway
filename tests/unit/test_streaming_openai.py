@@ -313,10 +313,11 @@ class TestStreamKiroToOpenai:
         
         async def mock_parse_kiro_stream(*args, **kwargs):
             yield KiroEvent(type="content", content="Hello")
-        
+            yield KiroEvent(type="usage", usage={"inputTokenCount": 10, "outputTokenCount": 1})
+
         print("Action: Streaming to OpenAI format...")
         chunks = []
-        
+
         with patch('kiro.streaming_openai.parse_kiro_stream', mock_parse_kiro_stream):
             with patch('kiro.streaming_openai.parse_bracket_tool_calls', return_value=[]):
                 async for chunk in stream_kiro_to_openai(
@@ -324,14 +325,14 @@ class TestStreamKiroToOpenai:
                     mock_model_cache, mock_auth_manager
                 ):
                     chunks.append(chunk)
-        
+
         print(f"Received {len(chunks)} chunks")
-        
+
         # Final chunk before [DONE] should have finish_reason: stop
         final_chunk = chunks[-2]  # Before [DONE]
         assert '"finish_reason": "stop"' in final_chunk
         print("✓ finish_reason is stop")
-    
+
     @pytest.mark.asyncio
     async def test_closes_response_on_completion(self, mock_http_client, mock_response, mock_model_cache, mock_auth_manager):
         """
@@ -1025,18 +1026,19 @@ class TestCollectStreamResponse:
         
         async def mock_parse_kiro_stream(*args, **kwargs):
             yield KiroEvent(type="content", content="Hello")
-        
+            yield KiroEvent(type="usage", usage={"inputTokenCount": 10, "outputTokenCount": 1})
+
         print("Action: Collecting stream response...")
-        
+
         with patch('kiro.streaming_openai.parse_kiro_stream', mock_parse_kiro_stream):
             with patch('kiro.streaming_openai.parse_bracket_tool_calls', return_value=[]):
                 result = await collect_stream_response(
                     mock_http_client, mock_response, "claude-sonnet-4",
                     mock_model_cache, mock_auth_manager
                 )
-        
+
         print(f"Result: {result}")
-        
+
         assert result["choices"][0]["finish_reason"] == "stop"
         print("✓ finish_reason is stop")
     
