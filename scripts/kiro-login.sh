@@ -3,8 +3,8 @@
 # kiro-login.sh — Log in with kiro-cli and copy the SQLite DB to the right account file.
 #
 # Usage:
-#   ./scripts/kiro-login.sh primary    # Log in with the primary (opus/sonnet) account
-#   ./scripts/kiro-login.sh haiku      # Log in with the haiku account
+#   ./scripts/kiro-login.sh primary      # Log in with the primary account (opus)
+#   ./scripts/kiro-login.sh secondary    # Log in with the secondary account (sonnet, haiku, etc.)
 #
 
 set -euo pipefail
@@ -12,10 +12,10 @@ set -euo pipefail
 KIRO_CLI_DB="$HOME/.local/share/kiro-cli/data.sqlite3"
 
 usage() {
-    echo "Usage: $0 <primary|haiku>"
+    echo "Usage: $0 <primary|secondary>"
     echo ""
-    echo "  primary  — Log in with the primary account (opus, sonnet, auto)"
-    echo "  haiku    — Log in with the haiku account"
+    echo "  primary    — Log in with the primary account (opus)"
+    echo "  secondary  — Log in with the secondary account (sonnet, haiku, auto, etc.)"
     exit 1
 }
 
@@ -29,8 +29,8 @@ case "$ACCOUNT" in
     primary)
         TARGET="$HOME/.local/share/kiro-cli/data-primary.sqlite3"
         ;;
-    haiku)
-        TARGET="$HOME/.local/share/kiro-cli/data-haiku.sqlite3"
+    secondary)
+        TARGET="$HOME/.local/share/kiro-cli/data-secondary.sqlite3"
         ;;
     *)
         echo "Error: unknown account '$ACCOUNT'"

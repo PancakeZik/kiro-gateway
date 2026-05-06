@@ -485,7 +485,7 @@ class UsageMonitor:
     Usage:
         monitor = UsageMonitor()
         monitor.add_account("primary", auth_manager_primary)
-        monitor.add_account("haiku", auth_manager_haiku)
+        monitor.add_account("secondary", auth_manager_secondary)
         await monitor.start()   # initial check + background loop
         ...
         monitor.increment("primary")  # call on each request

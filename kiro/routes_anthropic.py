@@ -160,13 +160,13 @@ async def messages(
     # Multi-account routing: pick auth manager based on model
     usage_account = "default"
     if getattr(request.app.state, "multi_account_routing", False):
-        from kiro.auth_router import resolve_auth_manager, is_haiku_model
+        from kiro.auth_router import resolve_auth_manager, is_primary_model
         auth_manager = resolve_auth_manager(
             request_data.model,
             request.app.state.auth_manager_primary,
-            request.app.state.auth_manager_haiku,
+            request.app.state.auth_manager_secondary,
         )
-        usage_account = "haiku" if is_haiku_model(request_data.model) else "primary"
+        usage_account = "primary" if is_primary_model(request_data.model) else "secondary"
 
     # Track request for usage monitoring
     usage_monitor = getattr(request.app.state, "usage_monitor", None)
