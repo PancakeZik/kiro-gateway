@@ -864,6 +864,15 @@ class KiroAuthManager:
         return self._fingerprint
     
     @property
+    def account_id(self) -> str:
+        """Short identifier for the current account, derived from client_id or profile_arn."""
+        if self._client_id:
+            return self._client_id[-8:]
+        if self._profile_arn:
+            return self._profile_arn[-8:]
+        return "unknown"
+
+    @property
     def auth_type(self) -> AuthType:
         """Authentication type (KIRO_DESKTOP or AWS_SSO_OIDC)."""
         return self._auth_type

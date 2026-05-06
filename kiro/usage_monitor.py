@@ -114,17 +114,29 @@ class LocalUsageCounter:
             return 0
         return entry.get("count", 0)
 
-    def increment(self, account: str, model: str = "") -> int:
+    def increment(self, account: str, model: str = "", account_id: str = "") -> int:
         """Increment and persist. Returns new count."""
         cycle = self._current_cycle()
         entry = self._data.get(account, {})
         if entry.get("billing_cycle") != cycle:
-            entry = {"count": 0, "billing_cycle": cycle, "models": {}}
+            entry = {"count": 0, "billing_cycle": cycle, "models": {}, "by_account": {}}
         entry["count"] = entry.get("count", 0) + 1
         if model:
             models = entry.get("models", {})
             models[model] = models.get(model, 0) + 1
             entry["models"] = models
+        if account_id:
+            by_acct = entry.get("by_account", {})
+            acct_entry = by_acct.get(account_id, {"count": 0, "models": {}})
+            if isinstance(acct_entry, int):
+                acct_entry = {"count": acct_entry, "models": {}}
+            acct_entry["count"] = acct_entry.get("count", 0) + 1
+            if model:
+                acct_models = acct_entry.get("models", {})
+                acct_models[model] = acct_models.get(model, 0) + 1
+                acct_entry["models"] = acct_models
+            by_acct[account_id] = acct_entry
+            entry["by_account"] = by_acct
         self._data[account] = entry
         self._save()
         return entry["count"]
@@ -496,9 +508,10 @@ class UsageMonitor:
         acct = self._accounts.get(account_name)
         if acct:
             acct.request_count += 1
+            account_id = acct.auth_manager.account_id
             # Also increment persistent local counter for accounts that use it
             if acct.local_limit > 0 or acct.disabled:
-                self._local_counter.increment(account_name, model)
+                self._local_counter.increment(account_name, model, account_id)
 
     def get_usage(self, account_name: str) -> Optional[UsageInfo]:
         """Get cached usage info for an account."""
