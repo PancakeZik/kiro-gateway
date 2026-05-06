@@ -178,6 +178,20 @@ All models output max 64k tokens.
 
 The profileArn requirement enables per-subscription usage tracking. SSO/IDC users who previously had unmetered access (because the old endpoint couldn't identify their subscription without profileArn) will have usage limits enforced after migration. The old endpoint without profileArn does NOT count against quota.
 
+### profileArn is per-org, not per-user (May 6, 2026)
+
+Tested with multiple users (jpbragatti, jpbragatti4) under the same AWS Identity Center directory (`d-906619b1be.awsapps.com`), including both Q Developer and Kiro login flows. All users return the same profileArn regardless of which account authenticates. The profileArn is tied to the **organization**, not the individual user.
+
+However, **authorization and quota are per-user**:
+- A user with no active subscription (jpbragatti2) gets the same profileArn but receives 403 "User is not authorized to make this call" on the new endpoint
+- The Kiro CLI shows separate usage credits per user
+- Multi-account routing still provides separate quotas per user on the new endpoint
+
+Implications:
+- The gateway only needs to fetch profileArn once (it's the same for any authenticated user in the org)
+- Multi-account routing remains useful for distributing quota across users
+- Inactive/expired subscriptions are blocked at the authorization layer, not the profile layer
+
 ## References
 
 - AWS Health Event: endpoint deactivation notice (April 2026)
