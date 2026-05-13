@@ -564,8 +564,8 @@ async def messages(
                                         "[System Notice] Your previous response was cut off mid-stream "
                                         "due to an API limitation. This is not your fault. "
                                         "Continue exactly from where you left off. "
-                                        "Remember: keep each Write and Edit tool call under ~150 lines. "
-                                        "For larger changes, split into multiple sequential calls."
+                                        "CRITICAL: each Write and Edit tool call MUST be under 100 lines. "
+                                        "Calls over 100 lines will be truncated and fail. Split into multiple sequential calls."
                                     ),
                                 )
                             )
@@ -579,8 +579,8 @@ async def messages(
                                         "[System Notice] Your previous response was cut off before any "
                                         "content was produced due to an API limitation. "
                                         "This is not your fault. Please try again. "
-                                        "Remember: keep each Write and Edit tool call under ~150 lines. "
-                                        "For larger changes, split into multiple sequential calls."
+                                        "CRITICAL: each Write and Edit tool call MUST be under 100 lines. "
+                                        "Calls over 100 lines will be truncated and fail. Split into multiple sequential calls."
                                     ),
                                 )
                             )
