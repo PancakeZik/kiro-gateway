@@ -136,11 +136,15 @@ async def get_models(request: Request):
 
     # Get all available models from resolver (cache + hidden models)
     available_model_ids = model_resolver.get_available_models()
+    model_cache = request.app.state.model_cache
 
     # Build OpenAI-compatible model list
     openai_models = [
         OpenAIModel(
-            id=model_id, owned_by="anthropic", description="Claude model via Kiro API"
+            id=model_id,
+            owned_by="anthropic",
+            description="Claude model via Kiro API",
+            context_length=model_cache.get_max_input_tokens(model_id),
         )
         for model_id in available_model_ids
     ]
