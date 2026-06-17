@@ -391,8 +391,9 @@ def sanitize_json_schema(schema: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     Sanitizes JSON Schema from fields that Kiro API doesn't accept.
 
     Kiro API returns 400 "Improperly formed request" error if:
-    - required is an empty array []
+    - required is an empty array [] or non-list value (None, string)
     - additionalProperties is present in schema
+    - $schema, $id, $anchor, $comment meta-keywords are present
 
     This function recursively processes the schema and removes problematic fields.
 
@@ -405,16 +406,20 @@ def sanitize_json_schema(schema: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     if not schema:
         return {}
 
+    # JSON Schema meta-keywords that Kiro/Bedrock rejects
+    _STRIP_KEYS = {"$schema", "$id", "$anchor", "$comment", "additionalProperties"}
+
     result = {}
 
     for key, value in schema.items():
-        # Skip empty required arrays
-        if key == "required" and isinstance(value, list) and len(value) == 0:
+        # Strip meta-keywords and additionalProperties
+        if key in _STRIP_KEYS:
             continue
 
-        # Skip additionalProperties - Kiro API doesn't support it
-        if key == "additionalProperties":
-            continue
+        # Strip required if not a non-empty list
+        if key == "required":
+            if not isinstance(value, list) or len(value) == 0:
+                continue
 
         # Recursively process nested objects
         if key == "properties" and isinstance(value, dict):
@@ -436,6 +441,10 @@ def sanitize_json_schema(schema: Optional[Dict[str, Any]]) -> Dict[str, Any]:
             ]
         else:
             result[key] = value
+
+    # Ensure root type is "object" if properties are present but type is missing
+    if "properties" in result and "type" not in result:
+        result["type"] = "object"
 
     return result
 
