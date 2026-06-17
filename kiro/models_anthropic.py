@@ -29,7 +29,7 @@ Reference: https://docs.anthropic.com/en/api/messages
 import time
 from typing import Any, Dict, List, Literal, Optional, Union
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 # ==================================================================================================
 # Content Block Models
@@ -314,6 +314,32 @@ class AnthropicMessagesRequest(BaseModel):
     metadata: Optional[Dict[str, Any]] = None
 
     model_config = {"extra": "allow"}
+
+    @model_validator(mode="before")
+    @classmethod
+    def extract_system_messages(cls, data):
+        if not isinstance(data, dict):
+            return data
+        messages = data.get("messages")
+        if not messages:
+            return data
+        system_msgs = [m for m in messages if isinstance(m, dict) and m.get("role") == "system"]
+        if not system_msgs:
+            return data
+        data["messages"] = [m for m in messages if not (isinstance(m, dict) and m.get("role") == "system")]
+        extracted = "\n\n".join(
+            m.get("content", "") for m in system_msgs if isinstance(m.get("content"), str)
+        )
+        if not extracted:
+            return data
+        existing = data.get("system")
+        if existing and isinstance(existing, str):
+            data["system"] = existing + "\n\n" + extracted
+        elif existing and isinstance(existing, list):
+            existing.append({"type": "text", "text": extracted})
+        else:
+            data["system"] = extracted
+        return data
 
 
 # ==================================================================================================

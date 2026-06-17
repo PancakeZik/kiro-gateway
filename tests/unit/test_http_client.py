@@ -1046,15 +1046,15 @@ class TestKiroHttpClientConnectionCloseHeader:
         mock_request = Mock()
         captured_headers = {}
         
-        def capture_build_request(method, url, json, headers):
-            captured_headers.update(headers)
+        def capture_build_request(method, url, **kwargs):
+            captured_headers.update(kwargs.get("headers", {}))
             return mock_request
-        
+
         mock_client = AsyncMock()
         mock_client.is_closed = False
         mock_client.build_request = Mock(side_effect=capture_build_request)
         mock_client.send = AsyncMock(return_value=mock_response)
-        
+
         print("Action: Executing streaming request...")
         with patch.object(http_client, '_get_client', return_value=mock_client):
             with patch('kiro.http_client.get_kiro_headers', return_value={"Authorization": "Bearer test"}):
@@ -1086,8 +1086,8 @@ class TestKiroHttpClientConnectionCloseHeader:
         
         captured_headers = {}
         
-        async def capture_request(method, url, json, headers):
-            captured_headers.update(headers)
+        async def capture_request(method, url, **kwargs):
+            captured_headers.update(kwargs.get("headers", {}))
             return mock_response
         
         mock_client = AsyncMock()
@@ -1124,15 +1124,15 @@ class TestKiroHttpClientConnectionCloseHeader:
         mock_request = Mock()
         captured_headers = {}
         
-        def capture_build_request(method, url, json, headers):
-            captured_headers.update(headers)
+        def capture_build_request(method, url, **kwargs):
+            captured_headers.update(kwargs.get("headers", {}))
             return mock_request
-        
+
         mock_client = AsyncMock()
         mock_client.is_closed = False
         mock_client.build_request = Mock(side_effect=capture_build_request)
         mock_client.send = AsyncMock(return_value=mock_response)
-        
+
         original_headers = {
             "Authorization": "Bearer test_token",
             "Content-Type": "application/json",

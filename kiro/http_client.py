@@ -31,6 +31,7 @@ with connection pooling for better resource management.
 """
 
 import asyncio
+import json
 from typing import Optional
 
 import httpx
@@ -211,15 +212,19 @@ class KiroHttpClient:
                 token = await self.auth_manager.get_access_token()
                 headers = get_kiro_headers(self.auth_manager, token)
                 
+                request_kwargs = {"headers": headers}
+                if json_data is not None:
+                    request_kwargs["content"] = json.dumps(json_data).encode()
+
                 if stream:
                     # Prevent CLOSE_WAIT connection leak (issue #38)
                     headers["Connection"] = "close"
-                    req = client.build_request(method, url, json=json_data, headers=headers)
+                    req = client.build_request(method, url, **request_kwargs)
                     logger.debug("Sending request to Kiro API...")
                     response = await client.send(req, stream=True)
                 else:
                     logger.debug("Sending request to Kiro API...")
-                    response = await client.request(method, url, json=json_data, headers=headers)
+                    response = await client.request(method, url, **request_kwargs)
                 
                 # Check status
                 if response.status_code == 200:
